@@ -70,7 +70,7 @@ jobs:
           pacman -S mingw-w64-x86_64-yasm mingw-w64-x86_64-nasm --overwrite=*
           pacman -S base-devel --overwrite=*
           pacman -S automake --overwrite=*
-          pacman -S mingw-w64-x86_64-nettle
+          pacman -S mingw-w64-x86_64-nettle --overwrite=*
       - name: build mingw
         if: runner.os == 'Windows'
         # pacman -S mingw-w64-x86_64-nettle
