@@ -64,11 +64,11 @@ jobs:
         run: |
           $env:PATH += ";C:\msys64\usr\bin"
           pacman -Syu
-          pacman -Sf mingw-w64-x86_64-gcc mingw-w64-x86_64-gdb 
-          pacman -Sf mingw-w64-x86_64-toolchain --overwrite=*
-          pacman -Sf base-devel --overwrite=*
-          pacman -Sf automake  autoconf --overwrite=*
-          pacman -Sf mingw-w64-x86_64-nettle --overwrite=*
+          pacman -S -force mingw-w64-x86_64-gcc mingw-w64-x86_64-gdb 
+          pacman -S -force mingw-w64-x86_64-toolchain --overwrite=*
+          pacman -S -force base-devel --overwrite=*
+          pacman -S -force automake  autoconf --overwrite=*
+          pacman -S -force mingw-w64-x86_64-nettle --overwrite=*
       - name: build mingw
         if: runner.os == 'Windows'
         # pacman -S mingw-w64-x86_64-nettle
