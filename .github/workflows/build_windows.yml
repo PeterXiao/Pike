@@ -70,6 +70,8 @@ jobs:
           pacman -S msys/autoconf
           pacman -S msys/automake-wrapper
           pacman -S mingw-w64-x86_64-nettle
+          $env:PATH += ";C:\msys64\mingw64\bin"
+          #export PATH=/mingw32/bin:$PATH
           make install
 
 
