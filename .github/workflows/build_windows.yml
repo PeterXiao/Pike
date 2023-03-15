@@ -65,7 +65,7 @@ jobs:
         run: |
           $env:PATH += ";C:\msys64\usr\bin"
           pacman -Syu
-          pacman -S   --noconfirm autoconf-wrapper --overwrite=*
+          #pacman -S   --noconfirm autoconf-wrapper --overwrite=*
           pacman -S  --noconfirm mingw-w64-x86_64-nettle --overwrite=*
       - name: build mingw
         if: runner.os == 'Windows'
