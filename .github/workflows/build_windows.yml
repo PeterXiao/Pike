@@ -64,11 +64,14 @@ jobs:
         run: |
           $env:PATH += ";C:\msys64\usr\bin"
           pacman -Syu
-          pacman -S base-devel
+          pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gdb mingw-w64-x86_64-cmake mingw-w64-x86_64-make
           pacman -S mingw-w64-x86_64-toolchain
+          pacman -S mingw-w64-x86_64-clang
+          pacman -S mingw-w64-x86_64-yasm mingw-w64-x86_64-nasm
+          pacman -S base-devel
           pacman -S automake
-          pacman -S msys/autoconf
-          pacman -S msys/automake-wrapper
+          pacman -S autoconf
+          pacman -S automake-wrapper
           pacman -S mingw-w64-x86_64-nettle
           $env:PATH += ";C:\msys64\mingw64\bin"
           #export PATH=/mingw32/bin:$PATH
