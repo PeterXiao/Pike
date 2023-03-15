@@ -58,7 +58,7 @@ jobs:
           echo "EMACS_VER=${{ env.Pike_MAJOR_VER }}.${{ github.run_number }}.${{ env.Pike_COMMIT }}" >> $GITHUB_ENV
         shell: bash
 
-      - name: Build and pack Emacs
+      - name: setup mingw
         if: runner.os == 'Windows'
         # pacman -S mingw-w64-x86_64-nettle
         run: |
@@ -73,8 +73,11 @@ jobs:
           pacman -S autoconf
           pacman -S automake-wrapper
           pacman -S mingw-w64-x86_64-nettle
-          $env:PATH += ";C:\msys64\mingw64\bin"
-          #export PATH=/mingw32/bin:$PATH
+      - name: build mingw
+        if: runner.os == 'Windows'
+        # pacman -S mingw-w64-x86_64-nettle
+        run: |
+          $env:PATH += ";C:\msys64\usr\bin;;C:\msys64\mingw64\bin"
           make install
 
 
