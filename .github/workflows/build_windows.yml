@@ -70,8 +70,6 @@ jobs:
           pacman -S mingw-w64-x86_64-yasm mingw-w64-x86_64-nasm
           pacman -S base-devel
           pacman -S automake
-          pacman -S autoconf
-          pacman -S automake-wrapper
           pacman -S mingw-w64-x86_64-nettle
       - name: build mingw
         if: runner.os == 'Windows'
