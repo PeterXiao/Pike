@@ -64,6 +64,7 @@ jobs:
         run: |
           $env:PATH += ";C:\msys64\usr\bin"
           pacman -Syu
+          pacman -S base-devel
           pacman -S mingw-w64-x86_64-toolchain
           pacman -S mingw-w64-x86_64-nettle
           make install
