@@ -66,6 +66,9 @@ jobs:
           pacman -Syu
           pacman -S base-devel
           pacman -S mingw-w64-x86_64-toolchain
+          pacman -S automake
+          pacman -S msys/autoconf
+          pacman -S msys/automake-wrapper
           pacman -S mingw-w64-x86_64-nettle
           make install
 
