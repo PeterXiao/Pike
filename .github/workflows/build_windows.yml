@@ -1,0 +1,69 @@
+# This is a basic workflow to help you get started with Actions
+
+name: build_windows
+
+permissions:
+  contents: write
+
+# Controls when the action will run.
+on:
+  schedule:
+    - cron: "0 0 * * 1" # weekly
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # Matrix strategy from
+    # https://github.com/msys2/MINGW-packages/blob/master/.github/workflows/main.yml
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            shell: powershell
+            arch: x86_64
+
+
+    # The type of runner that the job will run on
+    runs-on: ${{ matrix.os }}
+    env:
+      MSYS2_DIR: C:\msys64
+      EMACS_REPO: https://github.com/pikelang/Pike.git
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+
+      # Setup msys2
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          release: false
+      # This is the shortest job, but in this case it pulls all MSYS/MINGW64
+      - name: Clone Pike
+        if: runner.os == 'Windows'
+        run: git --clone --repo https://github.com/pikelang/Pike.git --depth 1
+
+
+      - name: Set package version
+        run: |
+          echo "EMACS_VER=${{ env.Pike_MAJOR_VER }}.${{ github.run_number }}.${{ env.Pike_COMMIT }}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build and pack Emacs
+        if: runner.os == 'Windows'
+        # pacman -S mingw-w64-x86_64-nettle
+        run: |
+          pacman -S mingw-w64-x86_64-nettle
+          make install
+
+
+ 
