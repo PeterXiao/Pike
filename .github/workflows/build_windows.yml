@@ -50,7 +50,7 @@ jobs:
       # This is the shortest job, but in this case it pulls all MSYS/MINGW64
       - name: Clone Pike
         if: runner.os == 'Windows'
-        run: git --clone --repo https://github.com/pikelang/Pike.git --depth 1
+        run:  git clone --depth 1 https://github.com/pikelang/Pike.git 
 
 
       - name: Set package version
