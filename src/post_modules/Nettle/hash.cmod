@@ -51,7 +51,7 @@ PIKECLASS Hash
 {
   /*! @decl inherit __builtin.Nettle.Hash
    */
-  INHERIT "__builtin.Nettle.Hash";
+  INHERIT "__builtin.Nettle.Hash" : Hash;
 
   CVAR const struct nettle_hash *meta;
 
@@ -174,7 +174,7 @@ PIKECLASS Hash
     void *ctx;
     size_t len;
     int fd;
-    char *read_buffer;
+    void *read_buffer;
     PIKE_STAT_T st;
     struct pike_string *out;
     const struct nettle_hash *meta = THIS->meta;
@@ -187,11 +187,11 @@ PIKECLASS Hash
       SIMPLE_OUT_OF_MEMORY_ERROR("hash", meta->context_size);
     meta->init(ctx);
 
-    if( get_memory_object_memory(in, (void **)&read_buffer, &len, NULL) )
+    if( get_memory_object_memory(in, &read_buffer, &len, NULL) )
     {
       if( bytes )
         len = MINIMUM(len, (size_t)MAXIMUM(bytes->u.integer,0) );
-      meta->update( ctx, len, (const uint8_t*)read_buffer);
+      meta->update( ctx, len, read_buffer);
       goto ret_meta;
     }
 
@@ -215,14 +215,14 @@ PIKECLASS Hash
       int bytes_left = bytes->u.integer;
       int read_bytes = MINIMUM(8192, bytes_left);
       while(read_bytes>0 && (len=fd_read(fd, read_buffer, read_bytes))>0) {
-	meta->update(ctx, len, (const uint8_t *)read_buffer);
+        meta->update(ctx, len, read_buffer);
 	bytes_left -= read_bytes;
 	read_bytes = MINIMUM(8192, bytes_left);
       }
     }
     else
       while((len=fd_read(fd, read_buffer, 8192))>0)
-	meta->update(ctx, len, (const uint8_t *)read_buffer);
+        meta->update(ctx, len, read_buffer);
 
     free(read_buffer);
 
@@ -460,6 +460,85 @@ PIKECLASS Hash
     memset(abcbuf, 0, 3*dsz);
   }
 
+#if defined(HAVE_NETTLE_BALLOON_H) && defined(HAVE_NETTLE_BALLOON)
+
+#include <nettle/balloon.h>
+
+  /*! @decl string(0..127) balloon(string(0..255) password, @
+   *!                              string(0..255) salt, @
+   *!                              int(1..) s_cost, @
+   *!                              int(1..) rounds)
+   *!
+   *!   Password hashing function in @[crypt_hash()]-style.
+   *!
+   *!   Implements the algorithm described in
+   *!   @url{https://eprint.iacr.org/2016/027.pdf@}.
+   *!
+   *! @param password
+   *!   Password to hash.
+   *!
+   *! @param salt
+   *!   Salt for the password.
+   *!
+   *! @param s_cost
+   *!   Memory cost.
+   *!
+   *! @param rounds
+   *!   Number of rounds (also known as @tt{t_cost@}).
+   *!
+   *! @returns
+   *!   Returns the balloon hash of the password.
+   *!
+   *! @note
+   *!   The @[password] memory will be cleared before released.
+   *!
+   *! @note
+   *!   This function is only available with Nettle 3.9 and later.
+   *!
+   *! @seealso
+   *!   @[crypt_hash()]
+   */
+  PIKEFUN string balloon(string password, string salt,
+                         int(1..) s_cost, int(1..) rounds)
+    optflags OPT_EXTERNAL_DEPEND;
+  {
+    void *ctx;
+    unsigned char *scratch_buffer;
+    size_t scratch_size;
+    struct pike_string *out;
+    const struct nettle_hash *meta = THIS->meta;
+
+    if (!meta)
+      Pike_error("HashInfo not properly initialized.\n");
+
+    password->flags |= STRING_CLEAR_ON_EXIT;
+
+    ctx = alloca(meta->context_size);
+    if (!ctx)
+      SIMPLE_OUT_OF_MEMORY_ERROR("balloon", meta->context_size);
+
+    scratch_size = balloon_itch(meta->digest_size, s_cost);
+    scratch_buffer = malloc(scratch_size);
+    if (!scratch_buffer) {
+      SIMPLE_OUT_OF_MEMORY_ERROR("balloon", scratch_size);
+    }
+
+    meta->init(ctx);
+
+    out = begin_shared_string(meta->digest_size);
+
+    balloon(ctx, meta->update, meta->digest, meta->digest_size,
+            s_cost, rounds, password->len, STR0(password),
+            salt->len, STR0(salt), scratch_buffer, STR0(out));
+
+    free(scratch_buffer);
+
+    pop_n_elems(args);
+    push_string(end_shared_string(out));
+  }
+
+#endif /* HAVE_NETTLE_BALLOON_H && HAVE_NETTLE_BALLOON */
+
 #ifdef PIKE_NULL_IS_SPECIAL
   INIT
     {
@@ -597,7 +676,7 @@ PIKECLASS Hash
 /* The algorithm objects can be overloaded in pike. */
 
 #cmod_define TOSTR(DEF)	#DEF
-#undef SPECIAL_PBKDF2
+#cmod_undef SPECIAL_PBKDF2
 
 
 #cmod_define PIKE_NAME MD5
@@ -620,9 +699,9 @@ PIKECLASS Hash
 
 #cmod_define PIKE_NAME SHA1
 #cmod_define NETTLE_NAME sha1
-#define SPECIAL_PBKDF2
+#cmod_define SPECIAL_PBKDF2
 #cmod_include "hash.H"
-#undef SPECIAL_PBKDF2
+#cmod_undef SPECIAL_PBKDF2
 #cmod_undef PIKE_NAME
 #cmod_undef NETTLE_NAME
 
@@ -638,9 +717,9 @@ PIKECLASS Hash
 
 #cmod_define PIKE_NAME SHA256
 #cmod_define NETTLE_NAME sha256
-#define SPECIAL_PBKDF2
+#cmod_define SPECIAL_PBKDF2
 #cmod_include "hash.H"
-#undef SPECIAL_PBKDF2
+#cmod_undef SPECIAL_PBKDF2
 #cmod_undef PIKE_NAME
 #cmod_undef NETTLE_NAME
 
@@ -715,6 +794,16 @@ PIKECLASS Hash
 
 #endif /* NETTLE_SHA3_FIPS202 */
 
+#ifdef HAVE_NETTLE_SM3_H
+
+#cmod_define PIKE_NAME SM3
+#cmod_define NETTLE_NAME sm3
+#cmod_include "hash.H"
+#cmod_undef PIKE_NAME
+#cmod_undef NETTLE_NAME
+
+#endif /* HAVE_NETTLE_SM3_H */
+
 #ifdef HAVE_NETTLE_RIPEMD160_H
 
 #cmod_define PIKE_NAME RIPEMD160
@@ -729,6 +818,31 @@ PIKECLASS Hash
 
 #cmod_define PIKE_NAME GOST94
 #cmod_define NETTLE_NAME gosthash94
+#cmod_include "hash.H"
+#cmod_undef PIKE_NAME
+#cmod_undef NETTLE_NAME
+
+/* gosthash94cp was added in Nettle 3.6. */
+#ifdef GHOSTHASH94CP_BLOCK_SIZE
+#cmod_define PIKE_NAME GOST94CP
+#cmod_define NETTLE_NAME gosthash94cp
+#cmod_include "hash.H"
+#cmod_undef PIKE_NAME
+#cmod_undef NETTLE_NAME
+#endif
+
+#endif
+
+#ifdef HAVE_NETTLE_STREEBOG_H
+
+#cmod_define PIKE_NAME STREEBOG256
+#cmod_define NETTLE_NAME streebog256
+#cmod_include "hash.H"
+#cmod_undef PIKE_NAME
+#cmod_undef NETTLE_NAME
+
+#cmod_define PIKE_NAME STREEBOG512
+#cmod_define NETTLE_NAME streebog512
 #cmod_include "hash.H"
 #cmod_undef PIKE_NAME
 #cmod_undef NETTLE_NAME

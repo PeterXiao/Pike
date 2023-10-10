@@ -40,6 +40,7 @@
 #include "pike_cpulib.h"
 #include "sprintf.h"
 #include "operators.h"
+#include "fdlib.h"
 
 #include <errno.h>
 
@@ -88,14 +89,6 @@
 #ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
 #endif /* HAVE_SYS_PRCTL_H */
-
-#ifdef HAVE_UTIME_H
-#include <utime.h>
-#endif
-
-#ifdef HAVE_SYS_UTIME_H
-#include <sys/utime.h>
-#endif
 
 #ifdef HAVE_NETINFO_NI_H
 #include <netinfo/ni.h>
@@ -166,13 +159,13 @@ static struct pike_string *pike_strerror(int e)
 
 /* Helper functions */
 
-static void report_error(const char *function_name)
+void report_os_error(const char *function_name)
 {
   int e = errno;
   struct pike_string *s = pike_strerror(e);
 
   if (s) {
-    Pike_error("%s(): Failed: %S\n", function_name, s);
+    Pike_error("%s(): Failed: %pS\n", function_name, s);
   }
   Pike_error("%s(): Failed: errno %d\n", function_name, e);
 }
@@ -188,7 +181,7 @@ static void report_error(const char *function_name)
  *! available to the Pike programmer.
  */
 
-#ifdef HAVE_LINK
+#if defined(HAVE_LINK) || defined(__NT__)
 /*! @decl void hardlink(string from, string to)
  *!
  *! Create a hardlink named @[to] from the file @[from].
@@ -205,24 +198,24 @@ void f_hardlink(INT32 args)
   char *to;
   int err;
 
-  get_all_args("hardlink",args, "%s%s", &from, &to);
+  get_all_args("hardlink",args, "%c%c", &from, &to);
 
   do {
     THREADS_ALLOW_UID();
-    err = link(from, to);
+    err = fd_link(from, to);
     THREADS_DISALLOW_UID();
     if (err >= 0 || errno != EINTR) break;
     check_threads_etc();
   } while (1);
 
   if (err < 0) {
-    report_error("hardlink");
+    report_os_error("hardlink");
   }
   pop_n_elems(args);
 }
-#endif /* HAVE_LINK */
+#endif /* HAVE_LINK || __NT__ */
 
-#ifdef HAVE_SYMLINK
+#if defined(HAVE_SYMLINK) || defined(__NT__)
 /*! @decl void symlink(string from, string to)
  *!
  *! Create a symbolic link named @[to] that points to @[from].
@@ -239,24 +232,24 @@ void f_symlink(INT32 args)
   char *to;
   int err;
 
-  get_all_args("symlink",args, "%s%s", &from, &to);
+  get_all_args("symlink",args, "%c%c", &from, &to);
 
   do {
     THREADS_ALLOW_UID();
-    err = symlink(from, to);
+    err = fd_symlink(from, to);
     THREADS_DISALLOW_UID();
     if (err >= 0 || errno != EINTR) break;
     check_threads_etc();
   } while (1);
 
   if (err < 0) {
-    report_error("symlink");
+    report_os_error("symlink");
   }
   pop_n_elems(args);
 }
-#endif /* HAVE_SYMLINK */
+#endif /* HAVE_SYMLINK || __NT__ */
 
-#ifdef HAVE_READLINK
+#if defined(HAVE_READLINK) || defined(__NT__)
 /*! @decl string readlink(string path)
  *!
  *! Returns what the symbolic link @[path] points to.
@@ -274,7 +267,7 @@ void f_readlink(INT32 args)
   char *buf;
   int err;
 
-  get_all_args("readlink",args, "%s", &path);
+  get_all_args("readlink",args, "%c", &path);
 
   buflen = 100;
 
@@ -286,7 +279,7 @@ void f_readlink(INT32 args)
 
     do {
       THREADS_ALLOW_UID();
-      err = readlink(path, buf, buflen);
+      err = fd_readlink(path, buf, buflen);
       THREADS_DISALLOW_UID();
       if (err >= 0 || errno != EINTR) break;
       check_threads_etc();
@@ -298,12 +291,12 @@ void f_readlink(INT32 args)
 	  (err >= buflen - 1));
 
   if (err < 0) {
-    report_error("readlink");
+    report_os_error("readlink");
   }
   pop_n_elems(args);
   push_string(make_shared_binary_string(buf, err));
 }
-#endif /* HAVE_READLINK */
+#endif /* HAVE_READLINK || __NT__ */
 
 #if !defined(HAVE_RESOLVEPATH) && !defined(HAVE_REALPATH)
 #ifdef HAVE_READLINK
@@ -335,7 +328,7 @@ void f_resolvepath(INT32 args)
   char *buf;
   int len = -1;
 
-  get_all_args("resolvepath", args, "%s", &path);
+  get_all_args("resolvepath", args, "%c", &path);
 
 #ifdef HAVE_RESOLVEPATH
   buflen = 100;
@@ -380,7 +373,7 @@ void f_resolvepath(INT32 args)
 #endif /* HAVE_RESOLVEPATH */
 
   if (len < 0) {
-    report_error("resolvepath");
+    report_os_error("resolvepath");
   }
   pop_n_elems(args);
   push_string(make_shared_binary_string(buf, len));
@@ -434,7 +427,7 @@ void f_chmod(INT32 args)
   INT_TYPE mode;
   int err;
 
-  get_all_args("chmod", args, "%s%i", &path, &mode);
+  get_all_args("chmod", args, "%c%i", &path, &mode);
   do {
     THREADS_ALLOW_UID();
     err = chmod(path, mode);
@@ -443,7 +436,7 @@ void f_chmod(INT32 args)
     check_threads_etc();
   } while (1);
   if (err < 0) {
-    report_error("chmod");
+    report_os_error("chmod");
   }
   pop_n_elems(args);
 }
@@ -472,7 +465,7 @@ void f_chown(INT32 args)
   int symlink = 0;
   int err;
 
-  get_all_args("chown", args, "%s%i%i.%d", &path, &uid, &gid, &symlink);
+  get_all_args("chown", args, "%c%i%i.%d", &path, &uid, &gid, &symlink);
 
 #ifndef HAVE_LCHOWN
 #ifdef HAVE_LSTAT
@@ -520,7 +513,7 @@ void f_chown(INT32 args)
 #endif
 
   if (err < 0) {
-    report_error("chown");
+    report_os_error("chown");
   }
   pop_n_elems(args);
 }
@@ -554,7 +547,7 @@ void f_utime(INT32 args)
   int symlink = 0;
   int err;
 
-  get_all_args("utime", args, "%s%i%i.%d", &path, &atime, &mtime, &symlink);
+  get_all_args("utime", args, "%c%i%i.%d", &path, &atime, &mtime, &symlink);
 
   if (symlink) {
 #ifdef HAVE_LUTIMES
@@ -571,7 +564,7 @@ void f_utime(INT32 args)
       check_threads_etc();
     } while (1);
     if (err < 0)
-      report_error("utime");
+      report_os_error("utime");
     pop_n_elems(args);
     return;
 
@@ -601,21 +594,13 @@ void f_utime(INT32 args)
 
   {
     /*&#()&@(*#&$ NT ()*&#)(&*@$#*/
-#ifdef _UTIMBUF_DEFINED
-    struct _utimbuf b;
-#else
-    struct utimbuf b;
-#endif
+    struct fd_utimbuf b;
 
     b.actime=atime;
     b.modtime=mtime;
     do {
       THREADS_ALLOW_UID();
-#if defined(HAVE__UTIME) && !defined(HAVE_UTIME)
-      err = _utime (path, &b);
-#else
-      err = utime(path, &b);
-#endif
+      err = fd_utime(path, &b);
       THREADS_DISALLOW_UID();
       if (err >= 0 || errno != EINTR) break;
       check_threads_etc();
@@ -628,7 +613,7 @@ void f_utime(INT32 args)
 #endif
 
   if (err < 0) {
-    report_error("utime");
+    report_os_error("utime");
   }
   pop_n_elems(args);
 }
@@ -718,10 +703,10 @@ void f_initgroups(INT32 args)
   int err;
   INT_TYPE group;
 
-  get_all_args("initgroups", args, "%s%i", &user, &group);
+  get_all_args("initgroups", args, "%c%i", &user, &group);
   err = initgroups(user, group);
   if (err < 0) {
-    report_error("initgroups");
+    report_os_error("initgroups");
   }
   pop_n_elems(args);
 }
@@ -748,7 +733,7 @@ void f_cleargroups(INT32 args)
   pop_n_elems(args);
   err = setgroups(0, (gid_t *)gids);
   if (err < 0) {
-    report_error("cleargroups");
+    report_os_error("cleargroups");
   }
 }
 
@@ -793,7 +778,7 @@ void f_setgroups(INT32 args)
 
   err = setgroups(size, gids);
   if (err < 0) {
-    report_error("setgroups");
+    report_os_error("setgroups");
   }
 }
 #endif /* HAVE_SETGROUPS */
@@ -835,7 +820,7 @@ void f_getgroups(INT32 args)
   free(gids);
 
   if (numgrps < 0) {
-    report_error("getgroups");
+    report_os_error("getgroups");
   }
 
   f_aggregate(numgrps);
@@ -1086,7 +1071,7 @@ void f_getpgrp(INT32 args)
   pgid = getpgrp();
 #endif
   if (pgid < 0)
-    report_error("getpgrp");
+    report_os_error("getpgrp");
 
   push_int(pgid);
 }
@@ -1114,7 +1099,7 @@ void f_setpgrp(INT32 args)
 #endif /* HAVE_SETPGRP_BSD */
 #endif /* HAVE_SETPGID */
   if (pid < 0)
-    report_error("setpgrp");
+    report_os_error("setpgrp");
 
   push_int(pid);
 }
@@ -1142,7 +1127,7 @@ void f_getsid(INT32 args)
   pop_n_elems(args);
   pid = getsid(pid);
   if (pid < 0)
-       report_error("getsid");
+    report_os_error("getsid");
   push_int(pid);
 }
 #endif
@@ -1163,7 +1148,7 @@ void f_setsid(INT32 args)
   pop_n_elems(args);
   pid = setsid();
   if (pid < 0)
-       report_error("setsid");
+    report_os_error("setsid");
   push_int(pid);
 }
 #endif
@@ -2111,7 +2096,7 @@ void f_gethostbyaddr(INT32 args)
   char *name;
   GETHOST_DECLARE;
 
-  get_all_args("gethostbyaddr", args, "%s", &name);
+  get_all_args("gethostbyaddr", args, "%c", &name);
 
   if ((int)(addr = inet_addr(name)) == -1) {
     Pike_error("IP-address must be of the form a.b.c.d.\n");
@@ -2157,7 +2142,7 @@ void f_gethostbyname(INT32 args)
   char *name;
   GETHOST_DECLARE;
 
-  get_all_args("gethostbyname", args, "%s", &name);
+  get_all_args("gethostbyname", args, "%c", &name);
 
   CALL_GETHOSTBYNAME(name);
   INVALIDATE_CURRENT_TIME();
@@ -2574,7 +2559,7 @@ void f_setproctitle(INT32 args)
   char *title;
 
   if (args > 1) f_sprintf(args);
-  get_all_args(NULL, args, "%s", &title);
+  get_all_args(NULL, args, "%c", &title);
   setproctitle("%s", title);
   pop_stack();
 }
@@ -2734,7 +2719,7 @@ static void f_get_netinfo_property(INT32 args)
   ni_status    res;
   unsigned int i, num_replies;
 
-  get_all_args("get_netinfo_property", args, "%s%s%s",
+  get_all_args("get_netinfo_property", args, "%c%c%c",
 	       &domain_str, &path_str, &prop_str);
 
   /* open domain */
@@ -3194,24 +3179,36 @@ PIKE_MODULE_INIT
   /*
    * From this file:
    */
-#ifdef HAVE_LINK
+#if defined(HAVE_LINK) || defined(__NT__)
 
-/* function(string, string:void) */
-  ADD_EFUN("hardlink", f_hardlink,tFunc(tStr tStr,tVoid), OPT_SIDE_EFFECT);
-  ADD_FUNCTION2("hardlink", f_hardlink,tFunc(tStr tStr,tVoid), 0, OPT_SIDE_EFFECT);
-#endif /* HAVE_LINK */
-#ifdef HAVE_SYMLINK
+#ifdef __NT__
+  if (Pike_NT_CreateHardLinkW) {
+#endif
+    /* function(string, string:void) */
+    ADD_EFUN("hardlink", f_hardlink, tFunc(tStr tStr, tVoid), OPT_SIDE_EFFECT);
+    ADD_FUNCTION2("hardlink", f_hardlink, tFunc(tStr tStr, tVoid), 0, OPT_SIDE_EFFECT);
+#ifdef __NT__
+  }
+#endif
+#endif /* HAVE_LINK || __NT__ */
+#if defined(HAVE_SYMLINK) || defined(__NT__)
 
-/* function(string, string:void) */
-  ADD_EFUN("symlink", f_symlink,tFunc(tStr tStr,tVoid), OPT_SIDE_EFFECT);
-  ADD_FUNCTION2("symlink", f_symlink,tFunc(tStr tStr,tVoid), 0, OPT_SIDE_EFFECT);
-#endif /* HAVE_SYMLINK */
-#ifdef HAVE_READLINK
+#ifdef __NT__
+  if (Pike_NT_CreateSymbolicLinkW) {
+#endif
+    /* function(string, string:void) */
+    ADD_EFUN("symlink", f_symlink, tFunc(tStr tStr, tVoid), OPT_SIDE_EFFECT);
+    ADD_FUNCTION2("symlink", f_symlink, tFunc(tStr tStr, tVoid), 0, OPT_SIDE_EFFECT);
+#ifdef __NT__
+  }
+#endif
+#endif /* HAVE_SYMLINK || __NT__ */
+#if defined(HAVE_READLINK) || defined(__NT__)
 
 /* function(string:string) */
   ADD_EFUN("readlink", f_readlink,tFunc(tStr,tStr), OPT_EXTERNAL_DEPEND);
   ADD_FUNCTION2("readlink", f_readlink,tFunc(tStr,tStr), 0, OPT_EXTERNAL_DEPEND);
-#endif /* HAVE_READLINK */
+#endif /* HAVE_READLINK || __NT__ */
 #if defined(HAVE_RESOLVEPATH) || defined(HAVE_REALPATH)
 
 /* function(string:string) */
@@ -3356,7 +3353,7 @@ PIKE_MODULE_INIT
                       OPT_EXTERNAL_DEPEND);
 #endif /* HAVE_GETPGRP */
 
-#ifdef HAVE_SETPGRP
+#if defined(HAVE_SETPGID) || defined(HAVE_SETPGRP)
   ADD_EFUN("setpgrp", f_setpgrp, tFunc(tNone, tInt),
 	   OPT_SIDE_EFFECT);
   ADD_FUNCTION2("setpgrp", f_setpgrp, tFunc(tNone, tInt), 0,

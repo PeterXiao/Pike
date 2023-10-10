@@ -31,6 +31,11 @@
 #include "signal_handler.h"
 #include "pike_types.h"
 
+#ifdef __NT__
+/* Needed for yywarning(). */
+#include "pike_compiler.h"
+#endif
+
 #ifdef HAVE_JAVA
 
 #include <locale.h>
@@ -198,10 +203,13 @@ static JNIEnv *jvm_procure_env(struct object *jvm)
   if(j) {
 
 #ifdef _REENTRANT
-    void *env;
+    JNIEnv *env;
 
-    if(JNI_OK == (*j->jvm)->GetEnv(j->jvm, &env, JNI_VERSION_1_2)) {
-      return (JNIEnv *)env;
+    /* NB: Second argument is actually a void **, but some versions
+     *     of gcc (like eg 3.4.3) complain about type-punning then.
+     */
+    if(JNI_OK == (*j->jvm)->GetEnv(j->jvm, (void *)&env, JNI_VERSION_1_2)) {
+      return env;
     }
 
     if(j->tl_env != NULL && j->tl_env->prog != NULL) {
@@ -211,7 +219,7 @@ static JNIEnv *jvm_procure_env(struct object *jvm)
       else {
 	env = ((struct att_storage *)((Pike_sp[-1].u.object)->storage))->env;
 	pop_n_elems(1);
-	return (JNIEnv *)env;
+        return env;
       }
     }
 
@@ -228,7 +236,7 @@ static JNIEnv *jvm_procure_env(struct object *jvm)
       safe_apply(j->tl_env, "set", 1);
 
     pop_n_elems(1);
-    return (JNIEnv *)env;
+    return env;
 #else
     return j->env;
 #endif /* _REENTRANT */
@@ -554,7 +562,7 @@ static void f_method_create(INT32 args)
   JNIEnv *env;
   char *p;
 
-  get_all_args(NULL, args, "%S%S%o", &name, &sig, &class);
+  get_all_args(NULL, args, "%n%n%o", &name, &sig, &class);
 
   if((c = get_storage(class, jclass_program)) == NULL)
     SIMPLE_ARG_TYPE_ERROR("create", 3, "Java class");
@@ -1180,7 +1188,7 @@ static void f_field_create(INT32 args)
     name = NULL;
     sig = NULL;
   } else
-    get_all_args(NULL, args, "%S%S%o", &name, &sig, &class);
+    get_all_args(NULL, args, "%n%n%o", &name, &sig, &class);
 
   if((c = get_storage(class, jclass_program)) == NULL)
     SIMPLE_ARG_TYPE_ERROR("create", 3, "Java class");
@@ -1516,6 +1524,34 @@ static void native_dispatch(struct native_method_context *ctx,
 #define ffi_sarg SINT_ARG
 #endif
 
+/* Work-around for some versions of libffi using C11-syntax
+ * (albeit C89-syntax valid) when declaring the ffi_closure
+ * typedef. With an old compiler the struct lacks some fields.
+ * This causes sizeof(ffi_closure) to be too small, leading to
+ * buffer overruns, etc.
+ *
+ * NB: We only use this struct as an argument to sizeof().
+ */
+struct pike_ffi_closure {
+  union {
+    ffi_closure ffi_c;
+#ifdef FFI_TRAMPOLINE_SIZE
+    /* NB: The following is compatible with at least
+     *     libffi 2.00-beta, 3.0.4 and 3.4.4.
+     */
+    struct {
+      union {
+        char pad[FFI_TRAMPOLINE_SIZE];
+        void *ptr;
+      } u;
+      void *ptr0;
+      void (*funptr)(void *, void *, void *, void *);
+      void *ptr1;
+    } pike_c;
+#endif
+  } u;
+};
+
 struct cpu_context {
 #ifdef HAVE_FFI_PREP_CLOSURE_LOC
   ffi_closure *closure;
@@ -1654,7 +1690,16 @@ static void *make_stub(struct cpu_context *ctx, void *data, int statc,
     Pike_error("ffi error %d\n", s);
 
 #ifdef HAVE_FFI_PREP_CLOSURE_LOC
-  if (!(ctx->closure = ffi_closure_alloc(sizeof(ffi_closure), &r)))
+  /* NB: On some platforms with older compilers sizeof(ffi_closure)
+   *     is too small to contain the trampoline code, leading to
+   *     buffer overruns and obscure failures.
+   *
+   *     We instead use sizeof(struct pike_ffi_closure) here
+   *     to make sure that we have enough space.
+   *
+   *     See also the declaration of struct pike_ffi_closure above.
+   */
+  if (!(ctx->closure = ffi_closure_alloc(sizeof(struct pike_ffi_closure), &r)))
     Pike_error("ffi failed to allocate closure\n");
   s = ffi_prep_closure_loc (ctx->closure, &ctx->cif,
 			    ffi_dispatch, data, r);
@@ -2279,8 +2324,6 @@ struct natives_storage {
 static void make_java_exception(struct object *jvm, JNIEnv *env,
 				struct svalue *v)
 {
-  union anything *a;
-  struct generic_error_struct *gen_err;
   struct jvm_storage *j = get_storage(jvm, jvm_program);
 
   if(!j)
@@ -2727,7 +2770,7 @@ static void f_throw_new(INT32 args)
   JNIEnv *env;
   char *cn;
 
-  get_all_args(NULL, args, "%s", &cn);
+  get_all_args(NULL, args, "%c", &cn);
 
   if((env = jvm_procure_env(jo->jvm))) {
 
@@ -3641,7 +3684,7 @@ static void f_find_class(INT32 args)
   char *cn;
   jclass c;
 
-  get_all_args(NULL, args, "%s", &cn);
+  get_all_args(NULL, args, "%c", &cn);
   if((env = jvm_procure_env(Pike_fp->current_object))) {
     c = (*env)->FindClass(env, cn);
     pop_n_elems(args);
@@ -3662,7 +3705,7 @@ static void f_define_class(INT32 args)
   char *name;
   jclass c;
 
-  get_all_args(NULL, args, "%s%o%S", &name, &obj, &str);
+  get_all_args(NULL, args, "%c%o%n", &name, &obj, &str);
   if((ldr = THAT_JOBJ(obj))==NULL)
     Pike_error("Bad argument 2 to define_class().\n");
   if((env = jvm_procure_env(Pike_fp->current_object))) {
@@ -3728,7 +3771,7 @@ static void f_javafatal(INT32 args)
   JNIEnv *env;
   char *msg;
 
-  get_all_args(NULL, args, "%s", &msg);
+  get_all_args(NULL, args, "%c", &msg);
   if((env = jvm_procure_env(Pike_fp->current_object))) {
     (*env)->FatalError(env, msg);
     jvm_vacate_env(Pike_fp->current_object, env);

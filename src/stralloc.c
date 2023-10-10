@@ -650,8 +650,19 @@ PMOD_EXPORT struct pike_string *debug_begin_wide_shared_string(size_t len, enum 
   struct pike_string *t = NULL;
   size_t bytes;
   ONERROR fe;
+  int extra = 0;
 
-  if ((ptrdiff_t)len < 0 || DO_SIZE_T_ADD_OVERFLOW(len, 1, &bytes) ||
+#ifdef __NT__
+  if (!shift && !(len & 1)) {
+    /* Make sure that there is space for an extra NUL in
+     * the string_to_unicode() case. Note that len is always
+     * an even number of characters in that case.
+     */
+    extra = 1;
+  }
+#endif
+
+  if ((ptrdiff_t)len < 0 || DO_SIZE_T_ADD_OVERFLOW(len, 1 + extra, &bytes) ||
       DO_SIZE_T_MUL_OVERFLOW(bytes, 1 << shift, &bytes)) {
     Pike_error("String is too large.\n");
   }
@@ -691,6 +702,11 @@ PMOD_EXPORT struct pike_string *debug_begin_wide_shared_string(size_t len, enum 
   DO_IF_DEBUG(t->next = NULL);
   UNSET_ONERROR(fe);
   low_set_index(t,len,0);
+#ifdef __NT__
+  if (extra) {
+    t->str[len + 1] = 0;
+  }
+#endif
   return t;
 }
 
@@ -841,6 +857,61 @@ struct pike_string *low_end_shared_string(struct pike_string *s)
   return s;
 }
 
+/**
+ * Count the number of UTF-16 surrogate pairs.
+ *
+ * Return -1 if there are invalid surrogates.
+ */
+static ptrdiff_t count_surrogate_pairs(const p_wchar1 *s, ptrdiff_t len)
+{
+  const p_wchar1 *e = s + len;
+  ptrdiff_t res = 0;
+
+  while (s+1 < e) {
+    switch(*s & 0xfc00) {
+    case 0xdc00:
+      /* Bad surrogate order. */
+      return -1;
+
+    case 0xd800:
+      if ((s[1] & 0xfc00) != 0xdc00) {
+        /* Missing surrogate in pair. */
+        return -1;
+      }
+      s++;
+      res++;
+      break;
+
+    default:
+      break;
+    }
+    s++;
+  }
+  if (s < e && ((*s & 0xf800) == 0xd800)) return -1;
+  return res;
+}
+
+/**
+ * Convert UTF-16 surrogates into wide characters.
+ *
+ * Assumes that all surrogates are valid and that there is
+ * sufficient space in the destination.
+ */
+static void convert_surrogate_pairs(p_wchar2 *dest, const p_wchar1 *s,
+                                    ptrdiff_t slen)
+{
+  const p_wchar1 *e = s + slen - 1;
+
+  while (s < e) {
+    p_wchar2 c = *s++;
+    if ((c & 0xfc00) == 0xdc00) {
+      p_wchar1 c2 = *s++ & 0x3ff;
+      c = ((c & 0x3ff) | c2) + 0x10000;
+    }
+    *dest++ = c;
+  }
+}
+
 /*
  * This function checks if the shift size can be decreased before
  * entering the string in the shared string table
@@ -877,6 +948,17 @@ PMOD_EXPORT struct pike_string *end_shared_string(struct pike_string *s)
        convert_1_to_0(STR0(s2),STR1(s),s->len);
        free_string(s);
        s=s2;
+      }
+      if (s->flags & STRING_CONVERT_SURROGATES) {
+        ptrdiff_t cnt = count_surrogate_pairs(STR1(s), s->len);
+        if (cnt > 0) {
+          s2 = begin_wide_shared_string(s->len - cnt, thirtytwobit);
+          convert_surrogate_pairs(STR2(s2), STR1(s), s->len);
+          free_string(s);
+          s = s2;
+        } else {
+          s->flags &= ~STRING_CONVERT_SURROGATES;
+        }
       }
       break;
 
@@ -1156,7 +1238,6 @@ struct pike_string *add_string_status(int verbose)
                           "------------------------------------------------------------\n");
     for(e = 0; e < 8; e++) {
       int shift = e & 3;
-      ptrdiff_t overhead;
       if (!num_distinct_strings[e]) continue;
       if (shift != 3) {
        if (e < 4) {
@@ -1546,7 +1627,7 @@ struct pike_string *realloc_unlinked_string(struct pike_string *a,
   size_t nbytes = (size_t)(size+1) << a->size_shift;
   size_t obytes = (size_t)a->len << a->size_shift;
 
-  if( size < a->len && size-a->len<(signed)sizeof(void*) )
+  if( size < a->len && ((size_t)a->len-size)<sizeof(void*) )
     goto done;
 
   if( nbytes < sizeof(struct pike_string) )
@@ -1683,7 +1764,7 @@ struct pike_string *modify_shared_string(struct pike_string *a,
   {
     /* We *might* need to shrink the string */
     struct pike_string *b;
-    unsigned int size,tmp;
+    enum size_shift size, tmp;
 
     switch(a->size_shift)
     {
@@ -1725,6 +1806,9 @@ struct pike_string *modify_shared_string(struct pike_string *a,
 	    STR1(b)[index]=c;
 	    free_string(a);
 	    return end_shared_string(b);
+
+          default:
+            break;
 	}
     }
   }
@@ -1768,6 +1852,78 @@ struct pike_string *modify_shared_string(struct pike_string *a,
     return end_shared_string(r);
   }
 }
+
+#ifdef __NT__
+/**
+ *  Convert a pike_string to a NUL-terminated array of UTF16 characters
+ *  suitable for use with various WIN32-APIs.
+ *
+ *  Throws errors on failure if the LSB of flags is set. Otherwise
+ *  returns NULL on failure.
+ */
+PMOD_EXPORT p_wchar1 *pike_string_to_utf16(struct pike_string *s,
+                                           unsigned int flags)
+{
+  p_wchar1 *res = NULL;
+  ptrdiff_t sz;
+
+  if (!s) goto done;
+
+  switch(s->size_shift) {
+  case sixteenbit:
+    sz = s->len + 1;
+    res = malloc(sz<<1);
+    if (!res) break;
+    memcpy(res, s->str, sz);
+    break;
+
+  case eightbit:
+    sz = s->len + 1;
+    res = malloc(sz<<1);
+    if (!res) break;
+    convert_0_to_1(res, STR0(s), sz);
+    break;
+
+  case thirtytwobit:
+    {
+      ptrdiff_t i;
+      ptrdiff_t j;
+      sz = 0;
+      for (i = 0; i < s->len; i++) {
+        p_wchar2 c = STR2(s)[i];
+        if (c & 0xffff0000) {
+          c -= 0x10000;
+          if (c & 0xfff00000) {
+            /* Invalid in UTF16. */
+            goto done;
+          }
+          sz++;
+        }
+      }
+      sz++;
+      res = malloc(sz<<1);
+      if (!res) break;
+      /* NB: Intentionally copies the terminating NUL. */
+      for (i = j = 0; i <= s->len; i++, j++) {
+        p_wchar2 c = STR2(s)[i];
+        if (c & 0xffff0000) {
+          c -= 0x10000;
+          res[j++] = 0xd8c00 | (c & 0x3ff);
+          c >>= 10;
+          c |= 0xd800;
+        }
+        res[j] = c;
+      }
+    }
+    break;
+  }
+ done:
+  if (!res && (flags & 1)) {
+    Pike_error("UTF16 conversion failed.\n");
+  }
+  return res;
+}
+#endif /* __NT__ */
 
 static void set_flags_for_add( struct pike_string *ret,
                                unsigned char aflags,

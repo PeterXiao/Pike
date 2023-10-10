@@ -669,7 +669,6 @@ constant_name: TOK_IDENTIFIER '=' safe_assignment_expr
 	pop_stack();
       }
     }
-  const_def_ok:
     if($3) free_node($3);
     free_node($1);
   }
@@ -4150,8 +4149,6 @@ qualified_ident:
   }
   | inherit_specifier TOK_IDENTIFIER
   {
-    int id;
-
     if(Pike_compiler->last_identifier) free_string(Pike_compiler->last_identifier);
     copy_shared_string(Pike_compiler->last_identifier, $2->u.sval.u.string);
 
@@ -4514,7 +4511,7 @@ lor_expr: land_expr
   ;
 
 cond_expr: lor_expr
-  | lor_expr '?' cond_expr ':' assignment_expr
+  | lor_expr '?' comma_expr ':' assignment_expr
   {
     $$ = mknode('?', $1, mknode(':', $3, $5));
   }
@@ -5579,6 +5576,7 @@ int low_add_local_name(struct compiler_frame *frame,
 #endif
     def->type = type;
   }
+  set_node_name(def, str);
   if (type && (type->type == PIKE_T_AUTO)) {
     frame->local_names[var].def->node_info |= OPT_TYPE_NOT_FIXED;
   }
@@ -5773,7 +5771,6 @@ static node *lexical_islocal(struct pike_string *str)
 	f->local_names[e].flags |= LOCAL_VAR_IS_USED;
 
         n = mklocalnode(e, depth);
-        set_node_name(n, str);
 
         return n;
       }
@@ -5807,6 +5804,19 @@ static node *safe_inc_enum(node *n)
   return ret;
 }
 
+static void safe_index(void)
+{
+  JMP_BUF tmp;
+  STACK_LEVEL_START(2);
+  if (SETJMP_SP(tmp, 2)) {
+    push_undefined();
+  } else {
+    f_index(2);
+  }
+  STACK_LEVEL_DONE(1);
+  UNSETJMP(tmp);
+}
+
 static node *find_versioned_identifier(struct pike_string *identifier,
 				       int major, int minor)
 {
@@ -5831,20 +5841,12 @@ static node *find_versioned_identifier(struct pike_string *identifier,
       res = mkconstantsvaluenode(efun);
   }
   else if (TYPEOF(c->default_module) != T_INT) {
-    JMP_BUF tmp;
-    if (SETJMP (tmp)) {
-      handle_compile_exception ("Couldn't index %d.%d "
-                                "default module with %pq.",
-				major, minor, identifier);
-    } else {
-      push_svalue(&c->default_module);
-      ref_push_string(identifier);
-      f_index (2);
-      if (!IS_UNDEFINED(Pike_sp - 1))
-	res = mkconstantsvaluenode(Pike_sp - 1);
-      pop_stack();
-    }
-    UNSETJMP(tmp);
+    push_svalue(&c->default_module);
+    ref_push_string(identifier);
+    safe_index();
+    if (!IS_UNDEFINED(Pike_sp - 1))
+      res = mkconstantsvaluenode(Pike_sp - 1);
+    pop_stack();
   }
 
   if (!res && !(res = resolve_identifier(identifier))) {

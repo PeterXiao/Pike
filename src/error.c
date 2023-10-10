@@ -429,7 +429,6 @@ PMOD_EXPORT void exit_on_error(const void *msg)
 
   else {
     struct byte_buffer buf = BUFFER_INIT();
-    char *s;
     struct svalue thrown;
 
     inhibit_errors = 1;
@@ -897,7 +896,7 @@ static void f_error_create(INT32 args)
   struct pike_string *msg;
   struct array *bt = NULL;
 
-  get_all_args(NULL, args, "%W.%A", &msg, &bt);
+  get_all_args(NULL, args, "%t.%A", &msg, &bt);
 
   do_free_string(GENERIC_ERROR_THIS->error_message);
   copy_shared_string(GENERIC_ERROR_THIS->error_message, msg);

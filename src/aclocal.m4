@@ -1506,8 +1506,8 @@ define([DO_IF_OS],
 dnl variable, file-path
 AC_DEFUN(PIKE_CHECK_FILE_ABI,
 [
-  PIKE_filetype=`file "$2" 2>/dev/null | sed -e 's/.*://'`
-  PIKE_filetype_L=`file -L "$2" 2>/dev/null | sed -e 's/.*://'`
+  PIKE_filetype=`file "$2" 2>/dev/null | sed -e 's/[^:]*://'`
+  PIKE_filetype_L=`file -L "$2" 2>/dev/null | sed -e 's/[^:]*://'`
   case "[$]PIKE_filetype:[$]PIKE_filetype_L" in
     *64-bit*)
       $1=64
@@ -2128,7 +2128,7 @@ AC_DEFUN(PIKE_PKG_CONFIG,
       PIKE_LOW_PKG_CONFIG([$1], [LDFLAGS],  [--libs-only-L])
       PIKE_LOW_PKG_CONFIG([$1], [LIBS],     [--libs-only-l --libs-only-other])
       AC_MSG_CHECKING([if $1 breaks compilation...])
-      AC_TRY_COMPILE([
+      AC_TRY_LINK([
 #include <stdio.h>
 #include <stdlib.h>
 ],[

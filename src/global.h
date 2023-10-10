@@ -94,6 +94,9 @@
 #endif /* _MSC_VER <= 1900 */
 #endif /* _MSC_VER */
 
+#endif /* __NT__ */
+
+#if defined(__NT__) || defined(__HAIKU__)
 /* NB: Defaults to 64. */
 #ifndef FD_SETSIZE
 /*
@@ -234,12 +237,17 @@ struct timeval;
 
 #ifdef HAS___BUILTIN_UNREACHABLE
 # define UNREACHABLE(X) __builtin_unreachable()
+#elif defined(HAS___ASSUME)
+# define UNREACHABLE(X)	__assume(0)
 #else
-# define UNREACHABLE(X) X
+# include <setjmp.h>
+# define UNREACHABLE(X) longjmp(NULL, 0)
 #endif
 
 #ifdef HAS___BUILTIN_ASSUME
 # define STATIC_ASSUME(X) __builtin_assume(X)
+#elif defined(HAS___ASSUME)
+# define STATIC_ASSUME(X) __assume(X)
 #else
 # define STATIC_ASSUME(X) do { if (!(X)) UNREACHABLE(0); } while(0)
 #endif
@@ -598,6 +606,49 @@ typedef struct p_wchar_p
 # define DMALLOCUSED(x) PIKE_UNUSED(x)
 #endif
 
+/* Add some recognition macros for availability of #pragmas. */
+#ifdef __GNUC__
+# if (__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4)
+   /* Several #pragmas were added in GCC 4.4. */
+#  define HAVE_PRAGMA_GCC_OPTIMIZE
+#  define HAVE_PRAGMA_GCC_PUSH_POP_OPTIONS
+#  define HAVE_PRAGMA_GCC_RESET_OPTIONS
+# endif
+# if (__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
+   /* #pragma GCC diagnostic was added in GCC 4.6. */
+#  define HAVE_PRAGMA_GCC_DIAGNOSTIC
+# endif
+# if (__GNUC__ >= 8)
+#  define HAVE_PRAGMA_GCC_UNROLL
+# endif
+#endif
+
+#ifdef __GNUC__
+# if (__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 3)
+/* The hot and cold attributes are not implemented in GCC
+ * versions prior to 4.3.
+ */
+#  define PIKE_HOT_ATTRIBUTE	ATTRIBUTE((hot))
+#  define PIKE_COLD_ATTRIBUTE	ATTRIBUTE((cold))
+# elif defined(__clang__)
+#  define PIKE_HOT_ATTRIBUTE	ATTRIBUTE((hot))
+#  define PIKE_COLD_ATTRIBUTE	ATTRIBUTE((cold))
+# endif
+# if (__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
+/* The noclone attribute was added in GCC 4.5. */
+#  define ATTRIBUTE_NOCLONE	ATTRIBUTE((noinline,noclone))
+# elif defined(__clang__)
+#  define ATTRIBUTE_NOCLONE	ATTRIBUTE((noinline,noclone))
+# endif
+#endif
+#ifndef PIKE_HOT_ATTRIBUTE
+# define PIKE_HOT_ATTRIBUTE
+# define PIKE_COLD_ATTRIBUTE
+#endif
+#ifndef ATTRIBUTE_NOCLONE
+/* In prior versions of GCC noinline implied noclone. */
+# define ATTRIBUTE_NOCLONE	ATTRIBUTE((noinline))
+#endif
 
 /* PMOD_EXPORT exports a function / variable vfsh. */
 #ifndef PMOD_EXPORT

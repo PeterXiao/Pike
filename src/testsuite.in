@@ -399,6 +399,8 @@ test_compile_any([[
   }
 ]])
 
+test_eq((["answer":42])->?answer, 42)
+
 define(test_string_range,[[
     test_any([[
         string s = (string) ({ $1, $1 });
@@ -5236,6 +5238,9 @@ test_encode(({"s",1,0,-3.40625}))
 test_encode((<"s",1,0,-3.40625>))
 test_encode((["s":1,1:2,0:3,-3.40625:4]))
 test_encode((<1, 2, 2, 3, 3, 3>))
+test_encode(({ 1<<20, "foo", "foo" }))
+test_encode(({ 1<<40, "foo", "foo" }))
+test_encode(({ 1<<70, "foo", "foo" }))
 test_eq(decode_value("\210\201"),1)
 test_eq(decode_value("\210\011\001"),-1)
 test_eq(decode_value("\206\200"),""))
@@ -10392,6 +10397,12 @@ test_do([[cpp(#"
 FOO(// Pike 7.6 and earlier don't seem to like single
     /* quotes (') in comments in macro arguments. */
 arg)")]])
+test_equal([[cpp(#"
+FOO(foo)", ([
+  "predefines": ([
+    "FOO(X)":"X Y X",
+  ]),
+]))]], "\n foo  Y  foo ")
 
 // The following three tests are in triplicate to force testing in all shifts.
 test_do([[
@@ -12520,6 +12531,11 @@ test_true(sizeof(getcwd()))
 test_do(Stdio.recursive_rm("getcwd_test"))
 test_do(mkdir("getcwd_test"))
 test_any([[
+  // NB: getcwd() may return $PWD if it matches the current directory.
+  //     We do not want this as it may differ from the canonic path
+  //     due to symlinks, etc in the path in $PWD, so invalidate $PWD.
+  putenv("PWD");
+  cd(".");	// Flush the cached value (if any).
   string a = getcwd();
   cd("getcwd_test");
   string b = getcwd();
@@ -12532,6 +12548,50 @@ test_any([[
     ({ a, b, getcwd() });
 #endif
 ]], 1)
+cond(Stdio.stdout["cd"], [[
+  test_any([[
+    string a = getcwd();
+    Stdio.File f = Stdio.File(".", "r");
+    f->cd("getcwd_test");
+    string b = getcwd();
+    cd("..");
+  #ifdef __NT__
+    return (a==getcwd() && b==a+"\\getcwd_test") || \
+      ({ a, b, getcwd() });
+  #else
+    return (a==getcwd() && b==a+"/getcwd_test") || \
+      ({ a, b, getcwd() });
+  #endif
+  ]], 1)
+  test_any([[
+    string a = getcwd();
+    Stdio.File f = Stdio.File("getcwd_test", "r");
+    f->cd();
+    string b = getcwd();
+    cd("..");
+  #ifdef __NT__
+    return (a==getcwd() && b==a+"\\getcwd_test") || \
+      ({ a, b, getcwd() });
+  #else
+    return (a==getcwd() && b==a+"/getcwd_test") || \
+      ({ a, b, getcwd() });
+  #endif
+  ]], 1)
+  test_any([[
+    string a = getcwd();
+    Stdio.File f = Stdio.File("getcwd_test", "r");
+    f->cd(".");
+    string b = getcwd();
+    cd("..");
+  #ifdef __NT__
+    return (a==getcwd() && b==a+"\\getcwd_test") || \
+      ({ a, b, getcwd() });
+  #else
+    return (a==getcwd() && b==a+"/getcwd_test") || \
+      ({ a, b, getcwd() });
+  #endif
+  ]], 1)
+]])
 test_do(Stdio.recursive_rm("getcwd_test"))
 
 // - getegid
@@ -13049,6 +13109,11 @@ ifefun(mktime,
   "timezone":0,
 ]) ) ]])
 
+  // Check for mktime() in default timezone having a second count
+  // that is off (observed on Haiku).
+  test_eq([[localtime(mktime(0,0,0,1,0,70))->sec]], 0)
+  test_eq([[localtime(mktime(59,59,23,31,11,69))->sec]], 59)
+
   test_any([[foreach(({1075550400,94691300,220921700,347152100,473382500,
 		       599612900,725843300,852073700,978304100,1104534500,
 		       1230764900,1356995300,1483225700,1609456100,1735686500,
@@ -13112,6 +13177,13 @@ ifefun(mktime,
   // Tue, 15 Oct 2002 09:38:32 GMT
   return mktime(32, 38, 9, 15, 9, 102, 0, 0);
   ]], 1034674712)
+]])
+cond([[all_constants()->mktime && (Pike.get_runtime_info()->time_size > 32)]],
+[[
+  test_any( [[
+  // Mon, 26 Dec 1791, Charles Babbage's birthday
+  return mktime((["year":-109,"mon":11,"mday":26,"timezone":0]));
+  ]], -5617641600)
 ]])
 
 // - multisetp
@@ -15688,6 +15760,35 @@ dump_test_module(Xyzzy.pike, 5)
 try_load_test_module(5)
 
 test_do(Stdio.recursive_rm("recursive_module_dump_test"))
+
+
+dnl Another dumping test
+test_do(Stdio.recursive_rm("cmod_dependency_dump_test"))
+test_do(mkdir("cmod_dependency_dump_test"))
+test_do(mkdir("cmod_dependency_dump_test/TestModule.pmod"))
+test_do([[Stdio.write_file("cmod_dependency_dump_test/TestModule.pmod/module.pmod", #"
+inherit Parser._parser.XML;
+.Foo.Bar x;
+")]])
+test_do([[Stdio.write_file("cmod_dependency_dump_test/TestModule.pmod/Foo.pmod", #"
+class Bar { inherit .Simple; }
+")]])
+
+test_tests([[ array a() {
+  Tools.Testsuite.log_status("Accessing TestModule.Foo before dump");
+  return Tools.Testsuite.run_script(({"-M", "cmod_dependency_dump_test", "-e", "TestModule.Foo"}));
+}]])
+test_tests([[ array a() {
+  Tools.Testsuite.log_status("Dumping module.pmod");
+  return Tools.Testsuite.run_script(({"-M", "cmod_dependency_dump_test", "-x", "dump", "cmod_dependency_dump_test/TestModule.pmod/module.pmod"}));
+}]])
+test_tests([[ array a() {
+  Tools.Testsuite.log_status("Accessing TestModule.Foo after dump");
+  return Tools.Testsuite.run_script(({"-M", "cmod_dependency_dump_test", "-e", "TestModule.Foo"}));
+}]])
+
+test_do(Stdio.recursive_rm("cmod_dependency_dump_test"))
+
 
 dnl - Deprecated safe indexing
 test_compile_warning( mapping foo; foo?->bar; )

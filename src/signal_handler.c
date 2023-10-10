@@ -376,7 +376,7 @@
    using modern OS:es and setting the signal flags correctly, but...)
 */
 
-#if defined(__GNUC__) && !defined(__clang__)
+#ifdef HAVE_PRAGMA_GCC_OPTIMIZE
 #pragma GCC optimize "-Os"
 #endif
 
@@ -1785,8 +1785,8 @@ static void f_pid_status_wait(INT32 args)
 
       default:
 lostchild:
-	Pike_error("Lost track of a child (pid %d, errno from wait %d).\n",
-		   THIS->pid, err);
+        Pike_error("Lost track of a child (pid %ld, errno from wait %d).\n",
+                   (long)THIS->pid, err);
 	break;
       }
     } else {
@@ -1880,7 +1880,7 @@ static void f_pid_status_set_priority(INT32 args)
   char *to;
   int r;
 
-  get_all_args(NULL, args, "%s", &to);
+  get_all_args(NULL, args, "%c", &to);
   r = set_priority( THIS->pid, to );
   pop_n_elems(args);
   push_int(r);
@@ -2574,7 +2574,7 @@ void f_set_priority( INT32 args )
   INT_TYPE pid = 0;
   char *plevel;
 
-  get_all_args("set_priority", args, "%s.%+", &plevel, &pid);
+  get_all_args("set_priority", args, "%c.%+", &plevel, &pid);
   pid = set_priority( pid, plevel );
   pop_n_elems(args);
   push_int( pid );
@@ -2714,7 +2714,7 @@ int fd_cleanup_cb(void *data, int fd)
  *!  by the main thread when the main backend is idle. Indeed, you can
  *!  specify a callback even if your program does not use a backend.
  *!
- *! @member string "cwd"
+ *! @member string|object(Stdio.Fd) "cwd"
  *!  Execute the command in another directory than the current
  *!  directory of this process. Please note that if the command is
  *!  given is a relative path, it will be relative to this directory
@@ -2722,11 +2722,17 @@ int fd_cleanup_cb(void *data, int fd)
  *!
  *!  Note also that the path is relative to the @expr{"chroot"@} if used.
  *!
- *! @member string "chroot"
+ *!  Note that support for the @[Stdio.Fd] variant is not present prior
+ *!  to Pike 9.0, and is only present on some OSes.
+ *!
+ *! @member string|object(Stdio.Fd) "chroot"
  *!   Chroot to this directory before executing the command.
  *!
  *!   Note that the current directory will be changed to @expr{"/"@} in
  *!   the chroot environment, unless @expr{"cwd"@} above has been set.
+ *!
+ *!   Note that support for the @[Stdio.Fd] variant is not present prior
+ *!   to Pike 9.0, and is only present on some OSes.
  *!
  *! @member Stdio.File "stdin"
  *! @member Stdio.File "stdout"
@@ -3312,7 +3318,9 @@ void f_create_process(INT32 args)
     int stds[3]; /* stdin, out and err */
     int cterm; /* controlling terminal */
     char *tmp_cwd; /* to CD to */
+    int tmp_cwd_fd = -1;
     char *mchroot;
+    int mchroot_fd = -1;
     char *priority = NULL;
     int *fds;
     int num_fds = 3;
@@ -3392,13 +3400,21 @@ void f_create_process(INT32 args)
 	}
       }
 
-      if((tmp = simple_mapping_string_lookup( optional, "chroot" )) &&
-         TYPEOF(*tmp) == T_STRING && !tmp->u.string->size_shift)
-        mchroot = tmp->u.string->str;
+      if ((tmp = simple_mapping_string_lookup( optional, "chroot" ))) {
+        if (TYPEOF(*tmp) == T_STRING && !tmp->u.string->size_shift) {
+          mchroot = tmp->u.string->str;
+        } else if (TYPEOF(*tmp) == T_OBJECT) {
+          mchroot_fd = fd_from_object(tmp->u.object);
+        }
+      }
 
-      if((tmp = simple_mapping_string_lookup( optional, "cwd" )) &&
-         TYPEOF(*tmp) == T_STRING && !tmp->u.string->size_shift)
-        tmp_cwd = tmp->u.string->str;
+      if ((tmp = simple_mapping_string_lookup( optional, "cwd" ))) {
+        if (TYPEOF(*tmp) == T_STRING && !tmp->u.string->size_shift) {
+          tmp_cwd = tmp->u.string->str;
+        } else if (TYPEOF(*tmp) == T_OBJECT) {
+          tmp_cwd_fd = fd_from_object(tmp->u.object);
+        }
+      }
 
       if((tmp = simple_mapping_string_lookup( optional, "setsid" )) &&
 	 ((TYPEOF(*tmp) == PIKE_T_INT && tmp->u.integer) ||
@@ -4047,7 +4063,7 @@ void f_create_process(INT32 args)
         {
 	  /* fprintf is not safe if we use vfork. */
           PROC_FPRINTF("[%d] child: chroot(\"%s\") failed, errno=%d\n",
-                       getpid(), chroot, errno);
+                       getpid(), mchroot, errno);
           PROCERROR(PROCE_CHROOT, 0);
         }
 	if (chdir("/"))
@@ -4057,6 +4073,25 @@ void f_create_process(INT32 args)
 	  PROCERROR(PROCE_CHDIR, 1);
 	}
       }
+
+#ifdef HAVE_FCHDIR
+      if(mchroot_fd != -1)
+      {
+        if (fchdir(mchroot_fd)) {
+          /* fprintf is not safe if we use vfork. */
+          PROC_FPRINTF("[%d] child: fchdir(%d) failed, errno=%d\n",
+                       getpid(), mchroot_fd, errno);
+          PROCERROR(PROCE_CHDIR, 0);
+        }
+        if (chroot("."))
+        {
+          /* fprintf is not safe if we use vfork. */
+          PROC_FPRINTF("[%d] child: chroot(\".\") failed, errno=%d\n",
+                       getpid(), errno);
+          PROCERROR(PROCE_CHROOT, 1);
+        }
+      }
+#endif
 #endif
 
       if(tmp_cwd)
@@ -4069,6 +4104,19 @@ void f_create_process(INT32 args)
           PROCERROR(PROCE_CHDIR, 0);
         }
       }
+
+#ifdef HAVE_FCHDIR
+      if(tmp_cwd_fd != -1)
+      {
+        if( fchdir( tmp_cwd_fd ) )
+        {
+          /* fprintf is not safe if we use vfork. */
+          PROC_FPRINTF("[%d] child: fchdir(%d) failed, errno=%d\n",
+                       getpid(), tmp_cwd_fd, errno);
+          PROCERROR(PROCE_CHDIR, 0);
+        }
+      }
+#endif
 
 #ifdef HAVE_NICE
       if(nice_val)

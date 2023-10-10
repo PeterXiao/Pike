@@ -12,7 +12,7 @@
 
 #ifdef PIKE_DEBUG
       if (fun < 0)
-	Pike_fatal ("Invalid function offset: %d.\n", fun);
+        Pike_fatal ("Invalid function offset: %td.\n", fun);
 #endif
       check_stack(256);
       check_mark_stack(256);
@@ -212,7 +212,7 @@
          function->func.offset == -1) {
 	new_frame->num_args = args;
 	generic_error(NULL, Pike_sp, args,
-		      "Calling undefined function %S%s%S().\n",
+                      "Calling undefined function %pS%s%pS().\n",
 		      (ref->inherit_offset && new_frame->context->name)?
 		      new_frame->context->name : empty_pike_string,
 		      ref->inherit_offset? "::" : "",
@@ -296,8 +296,6 @@
 
       case IDENTIFIER_PIKE_FUNCTION:
       {
-	int num_args;
-	int num_locals;
 	PIKE_OPCODE_T *pc;
 
 #ifdef PIKE_DEBUG

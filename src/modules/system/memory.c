@@ -118,7 +118,7 @@ static void MEMORY_FREE( struct memory_storage *storage )
 #endif
 #ifdef HAVE_SYS_SHM_H
   else if( storage->flags & MEM_FREE_SHMDEL )
-    shmdt( storage->p );
+    shmdt( (void *)storage->p );
 #endif
 #ifdef WIN32SHM
   else if( storage->flags & MEM_FREE_SHMDEL )
@@ -332,7 +332,7 @@ static void memory__mmap(INT32 args,int complain,int private)
    else if (TYPEOF(sp[-args]) == T_STRING)
    {
       char *filename;
-      get_all_args(NULL, args, "%s", &filename); /* 8 bit! */
+      get_all_args(NULL, args, "%c", &filename); /* 8 bit! */
 
       THREADS_ALLOW();
       fd = fd_open(filename,fd_RDWR,0);
@@ -706,7 +706,7 @@ static void pwrite_n(INT32 args, int shift, int reverse)
    struct pike_string *ps;
    unsigned char *d;
 
-   get_all_args(NULL,args,"%+%W",&pos,&ps);
+   get_all_args(NULL,args,"%+%t",&pos,&ps);
    rpos=(size_t)pos;
    rlen=(ps->len<<shift);
 

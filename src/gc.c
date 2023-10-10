@@ -3000,7 +3000,7 @@ int gc_cycle_push(void *data, struct marker *m, int weak)
 	  struct gc_rec_frame *rot_beg;
 	  rot_beg = rotate_rec_stack (cycle_frame, break_pos);
 	  rot_beg->rf_flags &= ~(GC_PREV_WEAK|GC_PREV_BROKEN);
-	  if (weak >= 0) rot_beg->rf_flags |= GC_PREV_STRONG;
+	  if (weak < 0) rot_beg->rf_flags |= GC_PREV_STRONG;
 
 	  if (rot_beg->cycle_id != break_pos->prev->cycle_id)
 	    /* Ensure that the cycle id frame is kept deepest in the
@@ -4952,7 +4952,7 @@ static int mc_cycle_depth_from_obj (struct object *o)
     int i = find_shared_string_identifier (pike_cycle_depth_str.u.string, p);
     INT_TYPE line;
     struct pike_string *file = get_identifier_line (p, i, &line);
-    make_error ("Object got non-integer pike_cycle_depth %O at %S:%ld.\n",
+    make_error ("Object got non-integer pike_cycle_depth %pO at %pS:%ld.\n",
 		&val, file, (long)line);
     free_svalue (&val);
     free_svalue (&throw_value);
@@ -4970,7 +4970,7 @@ static int mc_cycle_depth_from_obj (struct object *o)
     int i = find_shared_string_identifier (pike_cycle_depth_str.u.string, p);
     INT_TYPE line;
     struct pike_string *file = get_identifier_line (p, i, &line);
-    make_error ("Object got negative pike_cycle_depth at %S:%ld.\n",
+    make_error ("Object got negative pike_cycle_depth %pO at %pS:%ld.\n",
 		&val, file, (long)line);
     free_svalue (&throw_value);
     move_svalue (&throw_value, --Pike_sp);
@@ -6168,7 +6168,6 @@ void identify_loop_visit_leave(void *UNUSED(thing), int type, void *UNUSED(extra
 void f_identify_cycle(INT32 args)
 {
   struct svalue *s;
-  struct mc_marker *m;
   struct svalue *k;
 
   if (args != 1)

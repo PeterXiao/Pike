@@ -135,8 +135,9 @@ private constant Files = _static_modules._Stdio;
 #define capitalize(X) (upper_case((X)[..0])+(X)[1..])
 #define trim(X) (Builtin.string_trim (X))
 
-private function(string,mixed...:int) write = Files()->_stdout->write;
-private function(string,mixed...:int) werror = Files()->_stderr->write;
+private typedef function(sprintf_format, sprintf_args...:int) fprintf_type;
+private fprintf_type write = Files()->_stdout->write;
+private fprintf_type werror = Files()->_stderr->write;
 
 private object|zero Pike_Lazy;		// Used by the default encoder.
 
@@ -1232,6 +1233,10 @@ string|zero master_read_file(string file)
 
 #ifdef GETCWD_CACHE
 protected string current_path;
+void zap_getcwd_cache()
+{
+  current_path = 0;
+}
 int cd(string s)
 {
   current_path=0;
@@ -1908,14 +1913,14 @@ protected string call_describe_error(mixed /* object|array */ err)
 protected program|zero low_findprog(string pname,
                                     string ext,
                                     object|void handler,
-                                    void|int mkobj)
+                                    void|__deprecated__(int)|object placeholder)
 {
   program ret;
   Stat s;
   string fname=pname+ext;
 
   resolv_debug("low_findprog(%O, %O, %O, %O)\n",
-	       pname, ext, handler, mkobj);
+               pname, ext, handler, placeholder);
 
 #ifdef PIKE_MODULE_RELOC
   fname = unrelocate_module(fname);
@@ -1981,7 +1986,7 @@ protected program|zero low_findprog(string pname,
 	      INC_RESOLV_MSG_DEPTH();
 	      decoded = decode_value(read_precompiled (oname),
 				     (handler->?get_codec ||
-				      get_codec)(fname, mkobj, handler));
+                                      get_codec)(fname, placeholder, handler));
 	      DEC_RESOLV_MSG_DEPTH();
 	      resolv_debug ("low_findprog %s: dump decode ok\n", fname);
 	      if (decoded->?this_program_does_not_exist) {
@@ -2015,7 +2020,8 @@ protected program|zero low_findprog(string pname,
 	}
       }
 
-      resolv_debug ("low_findprog %s: compiling, mkobj: %O\n", fname, mkobj);
+      resolv_debug("low_findprog %s: compiling, placeholder: %O\n",
+                   fname, placeholder);
       INC_RESOLV_MSG_DEPTH();
       programs[fname]=ret=__empty_program(0, fname);
       AUTORELOAD_CHECK_FILE (fname);
@@ -2027,10 +2033,14 @@ protected program|zero low_findprog(string pname,
 	ret=programs[fname]=0;	// Negative cache.
 	compile_cb_rethrow (err);
       }
+      if (placeholder) {
+        if (!objectp((mixed)placeholder)) {
+          placeholder = __null_program();
+        }
+        objects[ret] = [object]placeholder;
+      }
       if ( mixed e=catch {
-	  ret=compile_string(src, fname, handler,
-			     ret,
-			     mkobj? (objects[ret]=__null_program()) : 0);
+          ret=compile_string(src, fname, handler, ret, placeholder);
 	} )
       {
 	DEC_RESOLV_MSG_DEPTH();
@@ -2144,33 +2154,33 @@ void unregister(program p)
 protected program findprog(string pname,
 			   string ext,
 			   object|void handler,
-			   void|int mkobj)
+                           void|__deprecated__(int)|object placeholder)
 {
   switch(ext)
   {
   case ".pike":
   case ".so":
-    return low_findprog(pname,ext,handler, mkobj);
+    return low_findprog(pname,ext,handler, placeholder);
 
   default:
     pname+=ext;
     return
-      low_findprog(pname,"", handler, mkobj) ||
-      low_findprog(pname,".pike", handler, mkobj) ||
-      low_findprog(pname,".so", handler, mkobj);
+      low_findprog(pname,"", handler, placeholder) ||
+      low_findprog(pname,".pike", handler, placeholder) ||
+      low_findprog(pname,".so", handler, placeholder);
   }
 }
 
 program|zero low_cast_to_program(string pname,
                                  string|zero current_file,
                                  object|void handler,
-                                 void|int mkobj)
+                                 void|__deprecated__(int)|object placeholder)
 {
   string ext;
   string nname;
 
   //werror("low_cast_to_program(%O, %O, %O, %O)\n",
-  //	 pname, current_file, handler, mkobj);
+  //	 pname, current_file, handler, placeholder);
 
   if(sscanf(reverse(BASENAME(pname)),"%s.%s",ext, nname))
   {
@@ -2188,6 +2198,11 @@ program|zero low_cast_to_program(string pname,
     program|NoValue prog = programs[pname];
     if ((!undefinedp(prog)) && (prog != no_value))
     {
+#if constant(clone_to)
+      if (objectp((mixed)placeholder)) {
+        clone_to([object]placeholder, prog);
+      }
+#endif
       return prog;
     }
 #ifdef PIKE_MODULE_RELOC
@@ -2195,7 +2210,7 @@ program|zero low_cast_to_program(string pname,
     if (!has_prefix(pname, "/${PIKE_MODULE_PATH}/"+UPDIR))
 #endif
       pname=combine_path("",pname);
-    return findprog(pname,ext,handler,mkobj);
+    return findprog(pname, ext, handler, placeholder);
   }
   else {
     string cwd;
@@ -2207,11 +2222,13 @@ program|zero low_cast_to_program(string pname,
       cwd=getcwd();
     }
 
-    if(program ret=findprog(combine_path(cwd,pname),ext,handler,mkobj))
+    if (program ret =
+        findprog(combine_path(cwd, pname), ext, handler, placeholder))
       return ret;
 
     foreach(pike_program_path, string path)
-      if(program ret=findprog(combine_path(path,pname),ext,handler,mkobj))
+      if(program ret =
+         findprog(combine_path(path, pname), ext, handler, placeholder))
 	return ret;
 
     return 0;
@@ -2530,19 +2547,36 @@ program handle_inherit(string pname, string current_file, object|void handler)
 }
 
 object|zero low_cast_to_object(string oname, string|zero current_file,
-                               object|void current_handler)
+                               object|void current_handler,
+                               object|void placeholder)
 {
   program p;
-  object o;
+  object o = placeholder || __null_program();
 
-  p = low_cast_to_program(oname, current_file, current_handler, 1);
-  if(!p) return 0;
+  p = low_cast_to_program(oname, current_file, current_handler, o);
+  if(!p) {
+    destruct(o);
+    return 0;
+  }
+#if 0
+  if (object_program(o) != p) {
+    error("low_cast_to_program() failed to initialize object: %O\n", o);
+  }
+  if (!objects[p]) {
+    object compiler_lock = DefaultCompilerEnvironment->lock();
+    if (!objects[p]) {
+      objects[p] = o;
+    }
+    destruct(compiler_lock);
+  }
+#else
   if(!objectp(o = objects[p])) {
     object compiler_lock = DefaultCompilerEnvironment->lock();
     // NB: p might be a function in a fake_object...
     if(!objectp(o = objects[p])) o = objects[p] = p();
     destruct(compiler_lock);
   }
+#endif
   return o;
 }
 
@@ -2693,7 +2727,8 @@ class dirnode (string dirname, object|void compilation_handler,
 
       if (mixed err = catch {
 	// Look up module.
-	if (module = cache["module"] || low_ind("module", 1)) {
+        if (module = cache["module"] ||
+            low_ind("module", __null_program())) {
 	  /* This allows for `[] to have side effects first time
 	   * it is called. (Specifically, the Calendar module uses
 	   * this).
@@ -2730,7 +2765,7 @@ class dirnode (string dirname, object|void compilation_handler,
     protected array _values() { if(module) return values(module); }
   }
 
-  protected mixed low_ind(string index, int(0..1)|void set_module)
+  protected mixed low_ind(string index, object|void placeholder)
   {
     array(string) paths;
 
@@ -2777,9 +2812,10 @@ class dirnode (string dirname, object|void compilation_handler,
 	//        low_findprog() and the caches.
 	mixed ret;
 	if (ret = catch {
-	    if (objectp(ret = low_cast_to_object(fname, 0, compilation_handler))) {
+            if (objectp(ret = low_cast_to_object(fname, 0, compilation_handler,
+                                                 placeholder))) {
 	      // This assignment is needed for eg the Calendar module.
-	      if (set_module) module = ret;
+              if (placeholder) module = ret;
 	      if(mixed tmp=ret->_module_value) ret=tmp;
 	      DEC_RESOLV_MSG_DEPTH();
 	      resolv_debug("dirnode(%O)->ind(%O) => found submodule %O:%O\n",
@@ -6132,11 +6168,32 @@ class Encoder
   }
 }
 
-class Decoder (void|string fname, void|int mkobj, void|object handler)
+class Decoder(void|string fname,
+              void|__deprecated__(int)|object placeholder,
+              void|object handler)
 //! @appears Pike.Decoder
 //!
 //! Codec for use with @[decode_value]. This is the decoder
 //! corresponding to @[Encoder]. See that one for more details.
+//!
+//! @param fname
+//!   Name of file being decoded.
+//!
+//! @param placeholder
+//!   Make a singleton object of the program being decoded.
+//!   One of:
+//!   @mixed
+//!     @type void|zero
+//!       Do not make an object.
+//!     @type object
+//!       Object to alter into the singleton.
+//!       MUST be a clone of @[__null_program()].
+//!     @type __deprecated__(int(1..1))
+//!       Old API: Generate a singleton object.
+//!   @endmixed
+//!
+//! @param handler
+//!   Handler object to use.
 {
   protected int unregistered = 1;
 
@@ -6150,8 +6207,12 @@ class Decoder (void|string fname, void|int mkobj, void|object handler)
       unregistered = 0;
       resolv_debug("register %s\n", fname);
       programs[fname]=p;
-      if (mkobj)
+      if (placeholder) {
+        if (objectp((mixed)placeholder)) {
+          DEC_RETURN(objects[p] = [object]placeholder);
+        }
 	DEC_RETURN (objectp (objects[p]) ? objects[p] : (objects[p]=__null_program()));
+      }
     }
     DEC_RETURN (0);
   }
@@ -6316,17 +6377,19 @@ class Decoder (void|string fname, void|int mkobj, void|object handler)
 // it's really pointless.
 protected mapping(string:Decoder) codecs = set_weak_flag (([]), 1);
 
-Decoder get_codec(string|void fname, int|void mkobj, void|object handler)
+Decoder get_codec(string|void fname,
+                  void|__deprecated__(int)|object placeholder,
+                  void|object handler)
 {
   if (handler)
     // Decoders are currently not reused in this case since it's
     // tricky to set up a weak multilevel mapping for lookup. This is
     // seldom a problem since explicit handlers are fairly rare. If it
     // is then the handler can always override this function.
-    return Decoder (fname, mkobj, handler);
-  string key = fname + "\0" + mkobj;
+    return Decoder (fname, placeholder, handler);
+  string key = fname + "\0" + !!((mixed)placeholder);
   if (codecs[key]) return codecs[key];
-  return codecs[key] = Decoder(fname, mkobj);
+  return codecs[key] = Decoder(fname, placeholder);
 }
 
 class Codec

@@ -277,6 +277,13 @@ o ADT.OrderedMapping
 Incompatible changes
 --------------------
 
+o As mentioned above; variables that may be set to 0 or UNDEFINED
+  now need to be declared accordingly. Note that this is not needed
+  for code that is compiled in compat mode for Pike 8.0 or earlier.
+
+o The new stricter type checker may expose old bugs that the
+  old type checker did not find.
+
 o Simplified the Iterator API.
 
   - Renamed Iterator API functions and made them LFUNs:
@@ -408,6 +415,19 @@ o Crypto.Checksum
 
   NB: In the future these may be amended to support the Crypto.Hash API.
 
+o Crypto.ECC.Curve.GOSTDSA
+
+  Add support for GOSTDSA (RFC 5832 and RFC 7091).
+
+o Crypto.ECC.Curve448
+
+  Add support for Edwards curve 448.
+
+o Crypto.SHA256.balloon() (and others)
+
+  This is a memory-hard password hashing algorithm. It requires Nettle 3.9
+  or later.
+
 o Parser.ECMAScript
 
   This module simply provides a token splitter for
@@ -449,6 +469,11 @@ o Pike.ProxyFactory()
   This is a function that generates a proxy class for objects
   of the given class.
 
+o Process.Process
+
+  Support using Stdio.Fd for "cwd" and "chroot" on OSes that
+  have fchdir(2).
+
 o Web.Auth & Web.Api
 o Web.EngineIO & Web.SocketIO
 o Protocols.HTTP2
@@ -462,6 +487,13 @@ o Thread.RWMutex
 
 New features
 ------------
+
+o Command-line options
+
+  - It is now possible to define function-style macros with the
+    command-line option '-D'. Eg:
+
+      $ pike '-DFOO(X)=X'
 
 o predef::backtrace()
 
@@ -675,9 +707,18 @@ o Standards.PKCS
 
   Support PKCS#8 private keys.
 
+o Stdio.Fd
+
+  - Support changing directory relative to an open file.
+
 o String.Buffer & Stdio.Buffer
 
   Added _search().
+
+o System.LookupAccountName(), etc [NT]
+
+  Several NT-specific functions now support wide strings
+  as arguments and as output.
 
 o The self testing framework now supports *.test-files.
 

@@ -55,7 +55,7 @@
 #define DEF_ARG_NEED_COMMA  0x800000
 #define DEF_ARG_MASK        0x0fffff
 
-#if defined(__GNUC__) && !defined(__clang__)
+#ifdef HAVE_PRAGMA_GCC_OPTIMIZE
 #pragma GCC optimize "-Os"
 #endif
 
@@ -521,8 +521,8 @@ static struct define_struct *find_define(struct CPP_struct *this, struct pike_st
   return (struct define_struct *)get_storage(s->u.object, define_program);
 }
 
-static ptrdiff_t calc(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		      ptrdiff_t tmp, int flags);
+static ptrdiff_t calc(struct CPP_struct *this, const PCHARP data,
+                      ptrdiff_t len, ptrdiff_t tmp, int flags);
 
 
   /*! @decl void report(SeverityLevel severity, @
@@ -587,7 +587,6 @@ static void cpp_report_vsprintf(struct CPP_struct *this, int severity,
 				const char *fmt, va_list args)
 {
   struct string_builder s;
-  struct pike_string *msg;
 
   if (severity >= REPORT_ERROR) {
     /* NB: This increment is here (and not in report()), to allow
@@ -1489,7 +1488,6 @@ static void cpp_warning(struct CPP_struct *this, const char *cpp_warn_fmt, ...)
 
     if (OUTP()) {
       int major, minor;
-      ptrdiff_t tmp;
       PCHARP ptr;
 
       string_builder_strcat(&this->buf, "#pike ");
@@ -1839,7 +1837,8 @@ static p_wchar2 readchar( PCHARP data, ptrdiff_t *pos, struct CPP_struct *this )
 }
 
 
-static ptrdiff_t readstring( struct CPP_struct *this, const PCHARP data, ptrdiff_t len, ptrdiff_t pos,
+static ptrdiff_t readstring( struct CPP_struct *this, const PCHARP data,
+                             ptrdiff_t len, ptrdiff_t pos,
 			     struct string_builder*nf, int  nl_ok)
 {
   while(1)
@@ -1892,7 +1891,8 @@ static ptrdiff_t readstring( struct CPP_struct *this, const PCHARP data, ptrdiff
   return pos;
 }
 
-static ptrdiff_t readstring_lit( struct CPP_struct *this, const PCHARP data, ptrdiff_t len, ptrdiff_t pos,
+static ptrdiff_t readstring_lit( struct CPP_struct *this, const PCHARP data,
+                                 ptrdiff_t len, ptrdiff_t pos,
 			     struct string_builder*nf, INT32 ec)
 {
   INT32 ch;
@@ -1914,8 +1914,9 @@ static ptrdiff_t readstring_lit( struct CPP_struct *this, const PCHARP data, ptr
   return pos;
 }
 
-static ptrdiff_t fixstring(struct CPP_struct *this, const PCHARP data, ptrdiff_t len,
-			   ptrdiff_t pos, struct string_builder *nf, int outp)
+static ptrdiff_t fixstring(struct CPP_struct *this, const PCHARP data,
+                           ptrdiff_t len, ptrdiff_t pos,
+                           struct string_builder *nf, int outp)
 {
   int trailing_newlines=0;
   if(outp) string_builder_putchar(nf, '"');
@@ -1988,7 +1989,8 @@ static ptrdiff_t find_end_of_line( struct CPP_struct *this, const PCHARP data,
 }
 
 
-static ptrdiff_t find_end_of_comment( struct CPP_struct *this, const PCHARP data, ptrdiff_t len,
+static ptrdiff_t find_end_of_comment( struct CPP_struct *this,
+                                      const PCHARP data, ptrdiff_t len,
                                       ptrdiff_t pos, int emit)
 {
   pos++;
@@ -2062,12 +2064,12 @@ static ptrdiff_t find_end_quote(struct CPP_struct *this, const PCHARP data,
 
 
 static ptrdiff_t find_end_brace(struct CPP_struct *this,
-				PCHARP data,
+                                const PCHARP data,
 				ptrdiff_t len,
 				ptrdiff_t pos);
 
 static ptrdiff_t find_end_parenthesis(struct CPP_struct *this,
-				      PCHARP data,
+                                      const PCHARP data,
 				      ptrdiff_t len,
 				      ptrdiff_t pos)
 /* pos is after the open paren. Returns the position after the close paren. */
@@ -2138,7 +2140,9 @@ static ptrdiff_t find_end_brace(struct CPP_struct *this,
   }
 }
 
-static struct pike_string *gobble_identifier (struct CPP_struct *this, const PCHARP data, ptrdiff_t *pos)
+static struct pike_string *gobble_identifier (struct CPP_struct *this,
+                                              const PCHARP data,
+                                              ptrdiff_t *pos)
 {
   ptrdiff_t p = *pos;
   struct string_builder sb;
@@ -2323,27 +2327,64 @@ static struct pike_string *make_define_name(struct CPP_struct *this,
   return make_shared_string(name);
 }
 
+static int parse_define_decl(struct CPP_struct *this,
+                             const PCHARP data,
+                             ptrdiff_t len,
+                             ptrdiff_t *posp,
+                             struct pike_string **def_name,
+                             int *varargsp);
+static void parse_define_body(struct CPP_struct *this,
+                              const PCHARP data,
+                              ptrdiff_t len,
+                              ptrdiff_t *posp,
+                              struct svalue *argbase,
+                              int argno,
+                              int flags);
 static struct define_struct *add_define(struct CPP_struct *this,
 					struct pike_string *name,
 					struct svalue *what)
 {
-  struct pike_string *orig_name = name;
+  struct pike_string *def_name = NULL;
   struct define_struct *def;
+  int argno;
+  int varargs = 0;
+  ptrdiff_t pos = 0;
+  struct svalue *argbase = Pike_sp;
+  PCHARP data = MKPCHARP_STR(name);
+  INT_TYPE save_line = this->current_line;
 
   if (!this->defines) {
     this->defines = allocate_mapping(32);
   }
 
-  if( (name->len > 2) &&
-      (index_shared_string(name, name->len-1) == ')') &&
-      (index_shared_string(name, name->len-2) == '(')) {
-    /* Function-style macro. */
-    push_string(name = string_slice(name, 0, name->len-2));
+  argno = parse_define_decl(this, data, name->len, &pos,
+                            &def_name, &varargs);
+
+  THIS->current_line = save_line;
+
+  if (!def_name) {
+    Pike_error("Invalid macro name.\n");
+  }
+
+  push_string(def_name);
+
+  if (pos < name->len) {
+    INC_PCHARP(data, pos);
+    push_string(make_shared_binary_pcharp(data, name->len - pos));
+    Pike_error("Junk after macro name: %pq.\n", Pike_sp[-1].u.string);
+  }
+
+  if (!argno) {
+    /* Compat with old syntax. */
+    argno = 1;
+    varargs = CPP_MACRO_VARARGS;
   }
 
   /* NB: alloc_empty_define() pushes the define object onto the stack.
    */
-  def = alloc_empty_define(name);
+  def = alloc_empty_define(def_name);
+  def->args = argno;
+  def->flags |= varargs | CPP_MACRO_KEEP_NL;
 
   if (!what || ((TYPEOF(*what) == PIKE_T_INT) && !what->u.integer)) {
     ref_push_string(empty_pike_string);
@@ -2351,10 +2392,20 @@ static struct define_struct *add_define(struct CPP_struct *this,
     def->parts = Pike_sp[-1].u.array;
     Pike_sp--;
   } else if (TYPEOF(*what) == PIKE_T_ARRAY) {
-    def->parts = what->u.array;
-    add_ref(what->u.array);
-  } else if ((TYPEOF(*what) == PIKE_T_STRING) ||
-	     (TYPEOF(*what) == PIKE_T_FUNCTION)) {
+    /* NB: Copy in order to keep safe from user altering contents. */
+    def->parts = copy_array(what->u.array);
+  } else if (TYPEOF(*what) == PIKE_T_STRING) {
+    struct pike_string *body = what->u.string;
+    data = MKPCHARP_STR(body);
+    pos = 0;
+    parse_define_body(this, data, body->len, &pos, argbase, argno,
+                      CPP_NO_OUTPUT|CPP_REALLY_NO_OUTPUT);
+    /* FIXME: Ought to validate that the entire body was parsed. */
+    def->parts = Pike_sp[-1].u.array;
+    Pike_sp--;
+
+    THIS->current_line = save_line;
+  } else if (TYPEOF(*what) == PIKE_T_FUNCTION) {
     push_svalue(what);
     f_aggregate(1);
     def->parts = Pike_sp[-1].u.array;
@@ -2365,14 +2416,8 @@ static struct define_struct *add_define(struct CPP_struct *this,
   }
 
   mapping_string_insert(this->defines, def->name, Pike_sp-1);
-  pop_stack();
 
-  if (orig_name != name) {
-    /* Function-style macro. */
-    def->flags |= CPP_MACRO_VARARGS | CPP_MACRO_KEEP_NL;
-    def->args = 1;
-    pop_stack();
-  }
+  pop_n_elems(Pike_sp - argbase);
 
   return def;
 }
@@ -2726,7 +2771,8 @@ static void add_quoted_string( const void *str, ptrdiff_t len, int shift,
   free_string(x);
 }
 
-static ptrdiff_t find_eos( struct CPP_struct *this, const PCHARP data, ptrdiff_t len, ptrdiff_t pos )
+static ptrdiff_t find_eos( struct CPP_struct *this, const PCHARP data,
+                           ptrdiff_t len, ptrdiff_t pos )
 {
     while(pos < len)
     {
@@ -2761,7 +2807,8 @@ static ptrdiff_t find_eos( struct CPP_struct *this, const PCHARP data, ptrdiff_t
     return pos;
 }
 
-static ptrdiff_t skipwhite(struct CPP_struct *this, const PCHARP data, ptrdiff_t pos)
+static ptrdiff_t skipwhite(struct CPP_struct *this, const PCHARP data,
+                           ptrdiff_t pos)
 {
   do
   {
@@ -2795,7 +2842,8 @@ static ptrdiff_t skipwhite(struct CPP_struct *this, const PCHARP data, ptrdiff_t
   return pos;
 }
 
-static ptrdiff_t skipspace(struct CPP_struct *this, const PCHARP data, ptrdiff_t pos, int emit)
+static ptrdiff_t skipspace(struct CPP_struct *this, const PCHARP data,
+                           ptrdiff_t pos, int emit)
 {
   do {
     int c;
@@ -2872,16 +2920,16 @@ static int begins_with( const char *prefix, const PCHARP stack, int len, int rem
 }
 
 static ptrdiff_t low_cpp(struct CPP_struct *this,
-                         PCHARP data,
+                         const PCHARP data,
                          ptrdiff_t len,
                          int flags,
                          struct pike_string *charset);
 
-static ptrdiff_t calc1(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags);
+static ptrdiff_t calc1(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags);
 
-static ptrdiff_t calcC(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calcC(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   SKIPWHITE();
 
@@ -3123,8 +3171,8 @@ static ptrdiff_t calcC(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calcB(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calcB(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calcB");
 
@@ -3143,8 +3191,8 @@ static ptrdiff_t calcB(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calcA(struct CPP_struct *this,PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calcA(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calcA");
 
@@ -3185,8 +3233,8 @@ static ptrdiff_t calcA(struct CPP_struct *this,PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc9(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc9(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc9");
 
@@ -3219,8 +3267,8 @@ static ptrdiff_t calc9(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc8(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc8(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc8");
 
@@ -3253,8 +3301,8 @@ static ptrdiff_t calc8(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc7b(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-			ptrdiff_t pos, int flags)
+static ptrdiff_t calc7b(struct CPP_struct *this, const PCHARP data,
+                        ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc7b");
 
@@ -3303,8 +3351,8 @@ static ptrdiff_t calc7b(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc7(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc7(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc7");
 
@@ -3336,8 +3384,8 @@ static ptrdiff_t calc7(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc6(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc6(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc6");
 
@@ -3356,8 +3404,8 @@ static ptrdiff_t calc6(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc5(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc5(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc5");
 
@@ -3375,8 +3423,8 @@ static ptrdiff_t calc5(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc4(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc4(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc4");
 
@@ -3394,8 +3442,8 @@ static ptrdiff_t calc4(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc3(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc3(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
 
   CALC_DUMPPOS("before calc3");
@@ -3422,8 +3470,8 @@ static ptrdiff_t calc3(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc2(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc2(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
 
   CALC_DUMPPOS("before calc2");
@@ -3450,8 +3498,8 @@ static ptrdiff_t calc2(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc1(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		       ptrdiff_t pos, int flags)
+static ptrdiff_t calc1(struct CPP_struct *this, const PCHARP data,
+                       ptrdiff_t len, ptrdiff_t pos, int flags)
 {
   CALC_DUMPPOS("before calc1");
 
@@ -3475,8 +3523,8 @@ static ptrdiff_t calc1(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
   return pos;
 }
 
-static ptrdiff_t calc(struct CPP_struct *this, PCHARP data, ptrdiff_t len,
-		      ptrdiff_t tmp, int flags)
+static ptrdiff_t calc(struct CPP_struct *this, const PCHARP data,
+                      ptrdiff_t len, ptrdiff_t tmp, int flags)
 {
   JMP_BUF recovery;
   ptrdiff_t pos;
@@ -3512,14 +3560,14 @@ static void apply_define(struct CPP_struct *this,
 			 struct pike_string *charset)
 {
   struct svalue *save_sp = Pike_sp;
-  JMP_BUF tmp;
+  JMP_BUF uwp;
 
   /* Keep d around... */
   push_svalue(&d->self);
 
   stack_swap();
 
-  if (!SETJMP(tmp)) {
+  if (!SETJMP(uwp)) {
     if ((d->args == 1) && !Pike_sp[-1].u.array->size &&
 	!(d->flags & CPP_MACRO_VARARGS)) {
       // Allow a single argument to be left out.
@@ -3531,7 +3579,7 @@ static void apply_define(struct CPP_struct *this,
     push_int(flags);
     apply_lfun(d->self.u.object, LFUN_CALL, 3);
 
-    UNSETJMP(tmp);
+    UNSETJMP(uwp);
 
     if (TYPEOF(Pike_sp[-1]) == PIKE_T_STRING) {
       int save_flags = d->flags;
@@ -3547,13 +3595,322 @@ static void apply_define(struct CPP_struct *this,
       this->compile_errors++;
     }
   } else {
-    UNSETJMP(tmp);
+    UNSETJMP(uwp);
 
     this->compile_errors++;
   }
 
   /* NB: Pop the args array too... */
   pop_n_elems(Pike_sp + 1 - save_sp);
+}
+
+/**
+ * Parse a macro declaration.
+ *
+ * @param posp
+ *   IN/OUT: Position in the data stream.
+ *
+ * @param def_name
+ *   OUT: Name of the macro.
+ *
+ * @param varargsp
+ *   IN/OUT: Varargs flag.
+ *
+ * Returns the number of arguments.
+ *
+ *   -1 if this is not a function-style macro.
+ *
+ *   Otherwise the number of arguments. Strings with the
+ *   name for each of the arguments are pushed on the stack.
+ *
+ */
+static int parse_define_decl(struct CPP_struct *this,
+                             const PCHARP data,
+                             ptrdiff_t len,
+                             ptrdiff_t *posp,
+                             struct pike_string **def_name,
+                             int *varargsp)
+{
+  int argno = -1;
+  int varargs = *varargsp;
+  ptrdiff_t pos = *posp;
+  SKIPSPACE();
+
+  do {
+    *def_name = GOBBLE_IDENTIFIER();
+    if(!*def_name) {
+      cpp_error(this, "Define what?");
+      FIND_EOL();
+      break;
+    }
+
+    if(GOBBLE('('))
+    {
+      argno = 0;
+      SKIPWHITE();
+
+      while(DATA(pos)!=')')
+      {
+        struct pike_string *arg_name;
+        if(argno)
+        {
+          if(!GOBBLE(','))
+            cpp_error(this,
+                      "Expecting comma in macro definition.");
+          SKIPWHITE();
+        }
+        if(varargs)
+          cpp_error(this,"Expected ) after ...");
+
+        arg_name = GOBBLE_IDENTIFIER();
+        SKIPWHITE();
+
+        if(DATA(pos)=='.' && DATA(pos+1)=='.' && DATA(pos+2)=='.')
+        {
+          varargs = CPP_MACRO_VARARGS;
+          pos+=3;
+          SKIPWHITE();
+
+          if (!arg_name) {
+            /* Default to C99-name for varargs macro. */
+            arg_name = MK_STRING("__VA_ARGS__");
+            add_ref(arg_name);
+          }
+        }
+
+        if(!arg_name)
+        {
+          cpp_error(this, "Expected argument name for macro.");
+          break;
+        }
+
+        check_stack(1);
+        push_string(arg_name);
+
+        argno++;
+        if(argno>=MAX_ARGS)
+        {
+          cpp_error(this, "Too many arguments in macro definition.");
+          pop_stack();
+          argno--;
+        }
+      }
+
+      if(!GOBBLE(')'))
+        cpp_error(this, "Missing ) in macro definition.");
+    }
+  } while(0);
+
+  SKIPSPACE();
+
+  *varargsp = varargs;
+  *posp = pos;
+  return argno;
+}
+
+/**
+ * Parse the body of a macro.
+ *
+ * @param posp
+ *   IN/OUT: Position in the data stream.
+ *
+ * @param argbase
+ *   IN: Array of svalues containing the parameter names (strings).
+ *   Must contain at least argno entries.
+ *
+ * @param argno
+ *   IN: Expected number of arguments. May be -1 to indicate
+ *   that this is not a function-style macro.
+ *
+ * On return an array representing the parsed data has
+ * been pushed on the pike stack.
+ */
+static void parse_define_body(struct CPP_struct *this,
+                              const PCHARP data,
+                              ptrdiff_t len,
+                              ptrdiff_t *posp,
+                              struct svalue *argbase,
+                              int argno,
+                              int UNUSED(flags))
+{
+  struct string_builder str;
+  ptrdiff_t pos = *posp;
+  struct svalue *partbase = Pike_sp;
+  ptrdiff_t tmp3;
+
+  do {
+    SKIPSPACE();
+
+    init_string_builder(&str, 0);
+
+    while(1)
+    {
+      INT32 extra=0;
+      ptrdiff_t old_pos = pos;
+
+      switch(DATA(pos++))
+      {
+      case '/':
+        if(DATA(pos)=='/')
+        {
+          if (this->keep_comments) {
+            FIND_EOL_PRETEND();
+            string_builder_append(&str, ADD_PCHARP(data, old_pos), pos-old_pos);
+            continue;
+          }
+          string_builder_putchar(&str, ' ');
+          FIND_EOL();
+          continue;
+        }
+
+        if(DATA(pos)=='*')
+        {
+          if (this->keep_comments) {
+            SKIPCOMMENT_INC_LINES();
+            string_builder_append(&str, ADD_PCHARP(data, old_pos), pos-old_pos);
+            continue;
+          }
+          string_builder_putchar(&str, ' ');
+          SKIPCOMMENT();
+          continue;
+        }
+
+        string_builder_putchar(&str, '/');
+        continue;
+
+      case '0': case '1': case '2': case '3':	case '4':
+      case '5': case '6': case '7': case '8':	case '9':
+        string_builder_putchar(&str, DATA(pos-1));
+        while(DATA(pos)>='0' && DATA(pos)<='9')
+          string_builder_putchar(&str, DATA(pos++));
+        continue;
+
+      case '\\':
+        if(GOBBLE('\n'))
+        {
+          this->current_line++;
+          PUTNL();
+          continue;
+        }
+        if (DATA(pos) == '\r' && DATA(pos+1) == '\n') {
+          pos += 2;
+          this->current_line++;
+          PUTNL();
+          continue;
+        }
+        /* Identifiers might start with \uxxxx, so try to parse
+         * an identifier now. */
+        goto gobble_identifier_in_define;
+
+      case ',':
+        {
+          int oldpos;
+
+          oldpos = pos;
+          SKIPSPACE_PRETEND();
+
+          if (DATA(pos) == '#' && DATA(pos+1) == '#') {
+            extra|= DEF_ARG_NEED_COMMA;
+            pos += 2;
+            goto concat_identifier;
+          } else {
+            pos = oldpos;
+            goto gobble_identifier_in_define;
+          }
+        }
+      case '#':
+        if(GOBBLE('#'))
+        {
+          extra= (extra & DEF_ARG_NEED_COMMA) | DEF_ARG_NOPRESPACE;
+
+          while(str.s->len && wide_isspace(index_shared_string(str.s,str.s->len-1)))
+            str.s->len--;
+        concat_identifier:
+          if(!str.s->len && Pike_sp-partbase>1)
+          {
+#ifdef PIKE_DEBUG
+            if(TYPEOF(Pike_sp[-1]) != PIKE_T_INT)
+              Pike_fatal("Internal error in CPP\n");
+#endif
+            Pike_sp[-1].u.integer|=DEF_ARG_NOPOSTSPACE;
+          }
+        }else{
+          extra=DEF_ARG_STRINGIFY;
+        }
+        SKIPSPACE();
+        pos++;
+        /* fall through */
+
+      gobble_identifier_in_define:
+      default: {
+        struct pike_string *s;
+        pos--;
+        s = GOBBLE_IDENTIFIER();
+        if (s)
+        {
+          tmp3=pos-1;
+          if(argno>0)
+          {
+            if (s->refs > 1)
+            {
+              ptrdiff_t e;
+              for(e=0;e<argno;e++)
+              {
+                if(argbase[e].u.string == s)
+                {
+                  check_stack(2);
+                  push_string(finish_string_builder(&str));
+                  init_string_builder(&str, 0);
+                  push_int(e | extra);
+                  extra=0;
+                  break;
+                }
+              }
+              if(e!=argno) {
+                free_string (s);
+                continue;
+              }
+            }
+          }
+          string_builder_shared_strcat (&str, s);
+          free_string (s);
+        }else{
+          string_builder_putchar(&str, DATA(pos++));
+        }
+        extra=0;
+        continue;
+      }
+
+      case '"':
+        FIXSTRING(str, 1);
+        continue;
+
+      case '\'':
+        tmp3=pos-1;
+        FIND_END_OF_CHAR();
+        string_builder_append(&str, ADD_PCHARP(data, tmp3), pos - tmp3);
+        continue;
+
+      case '\r':
+        if (DATA(pos) != '\n') {
+          string_builder_putchar(&str, '\r');
+        }
+        break;
+
+      case '\n':
+        PUTNL();
+        this->current_line++;
+        /* Fallthrough */
+      case 0:
+        break;
+      }
+      push_string(finish_string_builder(&str));
+      break;
+    }
+  } while(0);
+  *posp = pos;
+
+  f_aggregate(Pike_sp - partbase);
 }
 
 /*
@@ -3569,12 +3926,12 @@ static void apply_define(struct CPP_struct *this,
  *     The result of this is added to a temporary buffer.
  */
 static ptrdiff_t low_cpp(struct CPP_struct *this,
-                           PCHARP data,
+                           const PCHARP data,
 			   ptrdiff_t len,
 			   int flags,
 			   struct pike_string *charset)
 {
-  ptrdiff_t pos, tmp, e;
+  ptrdiff_t pos, tmp;
   int include_mode;
   INT_TYPE first_line = this->current_line;
   /* FIXME: What about this->current_file? */
@@ -4356,7 +4713,6 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 
                 if((flags & (CPP_NO_OUTPUT | CPP_REALLY_NO_OUTPUT)) == CPP_NO_OUTPUT)
                 {
-		  INT32 nflags;
 		  struct pike_string *s;
 		  SKIPSPACE();
 
@@ -4385,7 +4741,6 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 
                 if((flags & (CPP_NO_OUTPUT | CPP_REALLY_NO_OUTPUT)) == CPP_NO_OUTPUT)
                 {
-		  INT32 nflags;
 		  struct pike_string *s;
 		  SKIPSPACE();
 
@@ -4413,245 +4768,24 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 
               if(GOBBLE_WORD(define_))
               {
-                struct string_builder str;
                 INT32 argno=-1;
-                ptrdiff_t tmp3;
-                struct pike_string *def_name;
+                struct pike_string *def_name = NULL;
                 struct define_struct *def;
-                struct svalue *partbase,*argbase=Pike_sp;
+                struct svalue *argbase = Pike_sp;
                 int varargs=0;
 
-                SKIPSPACE();
+                argno = parse_define_decl(this, data, len, &pos,
+                                          &def_name, &varargs);
 
-                def_name = GOBBLE_IDENTIFIER();
-                if(!def_name) {
-                  cpp_error(this, "Define what?");
-                  FIND_EOL();
+                if (!def_name) {
+                  /* Syntax error, already reported. */
                   break;
                 }
 
-                if(GOBBLE('('))
-                {
-                  argno=0;
-                  SKIPWHITE();
-
-                  while(DATA(pos)!=')')
-                  {
-                    struct pike_string *arg_name;
-                    if(argno)
-                    {
-                      if(!GOBBLE(','))
-                        cpp_error(this,
-                                  "Expecting comma in macro definition.");
-                      SKIPWHITE();
-                    }
-                    if(varargs)
-                      cpp_error(this,"Expected ) after ...");
-
-                    arg_name = GOBBLE_IDENTIFIER();
-                    if(!arg_name)
-                    {
-                      cpp_error(this, "Expected argument for macro.");
-                      break;
-                    }
-
-                    check_stack(1);
-                    push_string(arg_name);
-
-                    SKIPWHITE();
-                    argno++;
-                    if(argno>=MAX_ARGS)
-                    {
-                      cpp_error(this, "Too many arguments in macro definition.");
-                      pop_stack();
-                      argno--;
-                    }
-
-                    if(DATA(pos)=='.' && DATA(pos+1)=='.' && DATA(pos+2)=='.')
-                    {
-                      varargs = CPP_MACRO_VARARGS;
-                      pos+=3;
-                      SKIPWHITE();
-                    }
-                  }
-
-                  if(!GOBBLE(')'))
-                    cpp_error(this, "Missing ) in macro definition.");
-                }
-
-                SKIPSPACE();
-
-                partbase=Pike_sp;
-                init_string_builder(&str, 0);
-
-                while(1)
-                {
-                  INT32 extra=0;
-                  ptrdiff_t old_pos = pos;
-
-                  switch(DATA(pos++))
-                  {
-                    case '/':
-                      if(DATA(pos)=='/')
-                      {
-                        if (this->keep_comments) {
-                          FIND_EOL_PRETEND();
-                          string_builder_append( &str, ADD_PCHARP(data, old_pos), pos-old_pos );
-                          continue;
-                        }
-                        string_builder_putchar(&str, ' ');
-                        FIND_EOL();
-                        continue;
-                      }
-
-                      if(DATA(pos)=='*')
-                      {
-                        if (this->keep_comments) {
-                          SKIPCOMMENT_INC_LINES();
-                          string_builder_append( &str, ADD_PCHARP(data, old_pos), pos-old_pos );
-                          continue;
-                        }
-                        PUTC(' ');
-                        SKIPCOMMENT();
-                        continue;
-                      }
-
-                      string_builder_putchar(&str, '/');
-                      continue;
-
-                    case '0': case '1': case '2': case '3':	case '4':
-                    case '5': case '6': case '7': case '8':	case '9':
-                      string_builder_putchar(&str, DATA(pos-1));
-                      while(DATA(pos)>='0' && DATA(pos)<='9')
-                        string_builder_putchar(&str, DATA(pos++));
-                      continue;
-
-                    case '\\':
-                      if(GOBBLE('\n'))
-                      {
-                        this->current_line++;
-                        PUTNL();
-                        continue;
-                      }
-                      if (DATA(pos) == '\r' && DATA(pos+1) == '\n') {
-                        pos += 2;
-                        this->current_line++;
-                        PUTNL();
-                        continue;
-                      }
-                      /* Identifiers might start with \uxxxx, so try to parse
-                       * an identifier now. */
-                      goto gobble_identifier_in_define;
-
-                    case ',':
-                      {
-                        int oldpos;
-
-                        oldpos = pos;
-                        SKIPSPACE_PRETEND();
-
-                        if (DATA(pos) == '#' && DATA(pos+1) == '#') {
-                          extra|= DEF_ARG_NEED_COMMA;
-                          pos += 2;
-                          goto concat_identifier;
-                        } else {
-                          pos = oldpos;
-                          goto gobble_identifier_in_define;
-                        }
-                      }
-                    case '#':
-                      if(GOBBLE('#'))
-                      {
-                        extra= (extra & DEF_ARG_NEED_COMMA) | DEF_ARG_NOPRESPACE;
-
-                        while(str.s->len && wide_isspace(index_shared_string(str.s,str.s->len-1)))
-                          str.s->len--;
-                      concat_identifier:
-                        if(!str.s->len && Pike_sp-partbase>1)
-                        {
-#ifdef PIKE_DEBUG
-                          if(TYPEOF(Pike_sp[-1]) != PIKE_T_INT)
-                            Pike_fatal("Internal error in CPP\n");
-#endif
-                          Pike_sp[-1].u.integer|=DEF_ARG_NOPOSTSPACE;
-                        }
-                      }else{
-                        extra=DEF_ARG_STRINGIFY;
-                      }
-                      SKIPSPACE();
-                      pos++;
-                      /* fall through */
-
-                    gobble_identifier_in_define:
-                    default: {
-                      struct pike_string *s;
-                      pos--;
-                      s = GOBBLE_IDENTIFIER();
-                      if (s)
-                      {
-                        tmp3=pos-1;
-                        if(argno>0)
-                        {
-                          if (s->refs > 1)
-                          {
-                            for(e=0;e<argno;e++)
-                            {
-                              if(argbase[e].u.string == s)
-                              {
-                                check_stack(2);
-                                push_string(finish_string_builder(&str));
-                                init_string_builder(&str, 0);
-                                push_int(e | extra);
-                                extra=0;
-                                break;
-                              }
-                            }
-                            if(e!=argno) {
-                              free_string (s);
-                              continue;
-                            }
-                          }
-                        }
-                        string_builder_shared_strcat (&str, s);
-                        free_string (s);
-                      }else{
-                        string_builder_putchar(&str, DATA(pos++));
-                      }
-                      extra=0;
-                      continue;
-                    }
-
-                    case '"':
-                      FIXSTRING(str, 1);
-                      continue;
-
-                    case '\'':
-                      tmp3=pos-1;
-                      FIND_END_OF_CHAR();
-                      string_builder_append(&str, ADD_PCHARP(data, tmp3), pos - tmp3);
-                      continue;
-
-		    case '\r':
-		      if (DATA(pos) != '\n') {
-			string_builder_putchar(&str, '\r');
-		      }
-		      break;
-
-                    case '\n':
-                      PUTNL();
-                      this->current_line++;
-                      /* Fallthrough */
-                    case 0:
-                      break;
-                  }
-                  push_string(finish_string_builder(&str));
-                  break;
-                }
+                parse_define_body(this, data, len, &pos, argbase, argno, flags);
 
                 if(OUTP())
                 {
-		  f_aggregate(Pike_sp - partbase);
-
                   def = alloc_empty_define(def_name);
                   def->args=argno;
                   def->flags |= varargs;
@@ -4704,7 +4838,6 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 
               if (GOBBLE_WORD(charset_)) {
                 ptrdiff_t p;
-                struct pike_string *s;
 
                 if (flags & (CPP_EXPECT_ENDIF | CPP_EXPECT_ELSE)) {
                   /* Only allowed at the top-level */
@@ -5254,6 +5387,16 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
  *! This define is defined when the Pike is running on Amiga OS.
  */
 
+/*! @decl constant __APPLE__
+ *!
+ *! This define is defined when the Pike is running on MacOS X.
+ */
+
+/*! @decl constant __HAIKU__
+ *!
+ *! This define is defined when the Pike is running on Haiku.
+ */
+
 /*! @endnamespace */
 
  /*! @decl void create(string|void current_file, @
@@ -5551,7 +5694,7 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 
     def = add_define(this, name, value);
 
-    if (real_numargs >= -1) {
+    if (real_numargs >= def->args) {
       def->args = real_numargs;
     }
     if (real_flags >= 0) {
@@ -5590,7 +5733,6 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
   PIKEFUN void define_ansi_macros()
   {
     struct CPP_struct *this = THIS;
-    struct define_struct *def;
 
     /* These attempt to be compatible with the C standard. */
     DO_MAGIC_DEFINE(__LINE__);
@@ -5661,6 +5803,9 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
 #ifdef __APPLE__
     simple_add_define(this, "__APPLE__", " 1 ");
 #endif
+#ifdef __HAIKU__
+    simple_add_define(this, "__HAIKU__", " 1 ");
+#endif
     simple_add_define(this, "SIZEOF_INT",
 		      " " DEFINETOSTR(SIZEOF_INT) " ");
     simple_add_define(this, "SIZEOF_FLOAT",
@@ -5668,35 +5813,47 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
   }
 
   /*! @decl void define_multiple_macros(mapping(string: @
-   *!                                           string|function|object)|void predefs)
+   *!     string|function|object|array(string|int))|void predefs)
    *!
    *!   Define multiple macros in one operation.
    *!
    *! @param predefs
    *!   Macros to define.
    *!
+   *! @note
+   *!   The values @[predefs] mapping may get updated by the function
+   *!   in order to improve performance of a second call.
+   *!
    *! @seealso
    *!   @[define_macro()], @[CompilationHandler()->get_predefines()],
    *!   @[_take_over_initial_predefines()]
    */
   PIKEFUN void define_multiple_macros(mapping(string:
-					      string|function|object)|void predefs)
+                 string|function|object|array(string|int))|void predefs)
   {
     struct CPP_struct *this = THIS;
     struct keypair *k;
     int e;
     if (!predefs) return;
     NEW_MAPPING_LOOP (predefs->data) {
+      struct define_struct *def;
       if ((TYPEOF(k->ind) != T_STRING) || !k->ind.u.string->len) {
         Pike_error("Expected nonempty string as predefine name, got %pO.\n",
 		   &k->ind);
       }
 
-      add_define(this, k->ind.u.string, &k->val);
+      def = add_define(this, k->ind.u.string, &k->val);
+
+      if (TYPEOF(k->val) != T_ARRAY) {
+        /* Cache the parsed macro body. */
+        free_svalue(&k->val);
+        m_val_types(predefs) |= (1 << T_ARRAY);
+        SET_SVAL(k->val, T_ARRAY, 0, array, copy_array(def->parts));
+      }
     }
   }
 
-  /*! @decl mapping(string:string|function|object) get_predefines()
+  /*! @decl mapping(string:string|function|object|array(string|int)) get_predefines()
    *!
    *!   Get the predefined macros for this preprocessor.
    *!
@@ -5716,7 +5873,7 @@ static ptrdiff_t low_cpp(struct CPP_struct *this,
    *!   @[init_pike_cpp()], @[define_multiple_macros()],
    *!   @[_take_over_initial_predefines()]
    */
-  PIKEFUN mapping(string:string|function|object) get_predefines()
+PIKEFUN mapping(string:string|function|object|array(string|int)) get_predefines()
   {
 #ifndef SUPPORT_HANDLERS
     apply_external(1, f_get_predefines_fun_num, args);

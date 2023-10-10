@@ -386,6 +386,7 @@ PMOD_EXPORT void push_random_string(unsigned len);
 
 PMOD_EXPORT extern void push_text( const char *x );
 PMOD_EXPORT extern void push_static_text( const char *x );
+PMOD_EXPORT extern void push_utf16_text(const p_wchar1 *x);
 
 #define push_constant_text(T) do{					\
     struct svalue *_sp_ = Pike_sp;					\
@@ -555,7 +556,7 @@ PMOD_EXPORT extern void push_static_text( const char *x );
 		   inh__, Pike_fp->context->prog->num_inherits-1);	\
       if (prog__ && (Pike_fp->context[inh__].prog != prog__))		\
 	Pike_fatal("Inherit #%d has wrong program %p != %p.\n",		\
-		   Pike_fp->context[inh__].prog, prog__);		\
+                   inh__, Pike_fp->context[inh__].prog, prog__);        \
     );									\
     VAR = ((TYPE *)(Pike_fp->current_object->storage +			\
 		    Pike_fp->context[inh__].storage_offset));		\
@@ -892,7 +893,12 @@ static inline void POP_PIKE_FRAME(void) {
 # endif /* PIKE_DEBUG */
   Pike_interpreter.accounted_time += self_time;
 
-  if (frame->context) {
+  if (frame->context && frame->fun != FUNCTION_BUILTIN) {
+# ifdef PIKE_DEBUG
+    if (frame->ident >= frame->context->prog->num_identifiers)
+      Pike_fatal("Profiling inexistant ident %d / %d\n", (int)frame->ident,
+                 (int)frame->context->prog->num_identifiers);
+# endif /* PIKE_DEBUG */
     function = frame->context->prog->identifiers + frame->ident;
     if (!--function->recur_depth)
       function->total_time += time_passed;

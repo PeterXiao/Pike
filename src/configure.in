@@ -1278,6 +1278,10 @@ if test "x$with_dtrace" = "xyes"; then
    fi
 fi
 
+if test "x$with_checker" = "xyes"; then
+  AC_DEFINE(__CHECKER__)
+else :; fi
+
 if test "x$with_relocatable_dumped_modules" = xyes; then
   PIKE_MODULE_RELOC=1
 else
@@ -1993,6 +1997,15 @@ return 0;
     fi
 ])
 
+# Check for compiler builtins/intrinsics.
+#
+# ECC:  <emmintrin.h>
+# ICC:  <immintrin.h>
+# IBMC: <builtins.h>
+# MSVC: <intrin.h>
+AC_CHECK_HEADERS(intrin.h emmintrin.h immintrin.h builtins.h \
+                 machine/bswap.h sys/endian.h util.h)
+
 # RDRND hardware random support
 AC_SYS_COMPILER_FLAG(-mrdrnd, opt_rdrnd, OPTIMIZE)
 TEST_BUILTIN(__builtin_ia32_rdrand64_step,[&foo])
@@ -2011,11 +2024,22 @@ TEST_BUILTIN(__builtin_bswap32, 23)
 TEST_BUILTIN(__builtin_bswap64, 23)
 TEST_BUILTIN(__builtin_expect, [foo,0])
 # ICC builtins
-TEST_BUILTIN(_bswap, 23)
-TEST_BUILTIN(_bswap64, 23)
-TEST_BUILTIN(_bit_scan_reverse, 23)
-TEST_BUILTIN(_bit_scan_forward, 23)
+TEST_BUILTIN(_bswap, 23, [
+    #include <immintrin.h>
+])
+TEST_BUILTIN(_bswap64, 23, [
+    #include <immintrin.h>
+])
+TEST_BUILTIN(_bit_scan_reverse, 23, [
+    #include <immintrin.h>
+])
+TEST_BUILTIN(_bit_scan_forward, 23, [
+    #include <immintrin.h>
+])
 # Visual Studio builtins
+TEST_BUILTIN_VOID(__assume, [23], [
+    #include <intrin.h>
+])
 TEST_BUILTIN(_BitScanForward, [&lint, 23], [
     #include <intrin.h>
 ])
@@ -2035,10 +2059,18 @@ TEST_BUILTIN(_byteswap_uint64, 23, [
     #include <stdlib.h>
 ])
 # IBM C builtins
-TEST_BUILTIN(__cntlz4, 23)
-TEST_BUILTIN(__cntlz8, 23)
-TEST_BUILTIN(__cnttz4, 23)
-TEST_BUILTIN(__cnttz8, 23)
+TEST_BUILTIN(__cntlz4, 23, [
+    #include <builtins.h>
+])
+TEST_BUILTIN(__cntlz8, 23, [
+    #include <builtins.h>
+])
+TEST_BUILTIN(__cnttz4, 23, [
+    #include <builtins.h>
+])
+TEST_BUILTIN(__cnttz8, 23, [
+    #include <builtins.h>
+])
 
 
 #############################################################################
@@ -2900,13 +2932,13 @@ AC_CHECK_HEADERS(winsock2.h sys/rusage.h sys/time.h \
 		 sys/poll.h socket.h ieeefp.h fp_class.h floatingpoint.h \
 		 sys/priocntl.h sys/sched.h winbase.h \
 		 sys/termio.h termios.h sys/termios.h \
+                 utime.h sys/utime.h \
 		 ws2tcpip.h valgrind/memcheck.h memcheck.h valgrind.h \
 		 sys/prctl.h sys/ioctl.h mach/task_info.h mach/task.h \
 		 mach/mach_init.h syscall.h sys/syscall.h devices/timer.h \
 		 direct.h CoreServices/CoreServices.h execinfo.h \
 		 mach/mach.h mach/thread_act.h mach/clock.h \
-		 mach/port.h mach/message.h \
-		 machine/bswap.h sys/endian.h emmintrin.h util.h,,,[
+                 mach/port.h mach/message.h,,,[
 #if (defined(__WINNT__) || defined(__WIN32__)) && !defined(__NT__)
 #define __NT__
 #endif
@@ -3883,6 +3915,9 @@ pthread_t gazonk;
 
 #include <stdlib.h>
 #include <pthread.h>
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 void *foo(void *bar) { return (void *)getpid();  }
 pthread_mutexattr_t attr;
@@ -4257,6 +4292,7 @@ AC_CHECK_FUNCS( \
  closefrom \
  crypt \
  crypt_r \
+ fchdir \
  fdwalk \
  ftruncate64 \
  gethrtime \
@@ -4287,6 +4323,7 @@ AC_CHECK_FUNCS( \
  wait3 \
  wait4 \
  waitpid \
+ _wutime64 \
  munmap \
  shl_load \
  dld_link \
@@ -4319,6 +4356,7 @@ AC_CHECK_FUNCS( \
  isnan \
  _isnan \
  iszero \
+ finite \
  _finite \
  signbit \
  nan \

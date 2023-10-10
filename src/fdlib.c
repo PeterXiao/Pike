@@ -37,13 +37,29 @@
 
 #include <time.h>
 
-/* Old versions of the headerfiles don't have this constant... */
+/* Old versions of the headerfiles don't have these constants... */
 #ifndef INVALID_SET_FILE_POINTER
 #define INVALID_SET_FILE_POINTER ((DWORD)-1)
 #endif
 
 #ifndef ENOTSOCK
 #define ENOTSOCK	WSAENOTSOCK
+#endif
+
+#ifndef ERROR_DIRECTORY_NOT_SUPPORTED
+#define ERROR_DIRECTORY_NOT_SUPPORTED	336L
+#endif
+
+#ifndef SYMBOLIC_LINK_FLAG_DIRECTORY
+#define SYMBOLIC_LINK_FLAG_DIRECTORY			0x1
+#endif
+
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE	0x2
+#endif
+
+#ifndef FSCTL_GET_REPARSE_POINT
+#define FSCTL_GET_REPARSE_POINT				0x0900a8
 #endif
 
 #include "threads.h"
@@ -202,6 +218,7 @@ static const unsigned long pike_doserrtab[][2] = {
   {  ERROR_INFLOOP_IN_RELOC_CHAIN,	ENOEXEC		}, /* 202 */
   {  ERROR_FILENAME_EXCED_RANGE,	ENOENT,		}, /* 206 */
   {  ERROR_NESTING_NOT_ALLOWED,		EAGAIN,		}, /* 215 */
+  {  ERROR_DIRECTORY_NOT_SUPPORTED,	EISDIR,		}, /* 336 */
   {  ERROR_NOT_ENOUGH_QUOTA,		ENOMEM,		}, /* 1816 */
 };
 
@@ -712,6 +729,8 @@ void fd_init(void)
   int e;
   WSADATA wsadata;
   OSVERSIONINFO osversion;
+
+  FDDEBUG(fprintf(stderr, "fd_init()...\n"));
 
   mt_init(&fd_mutex);
   co_init(&fd_cond);
@@ -1411,6 +1430,27 @@ PMOD_EXPORT int debug_fd_stat(const char *file, PIKE_STAT_T *buf)
   return(0);
 }
 
+PMOD_EXPORT int debug_fd_utime(const char *file, struct fd_utimbuf *times)
+{
+  p_wchar1 *fname = pike_dwim_utf8_to_utf16(file);
+  int ret;
+
+  if (!fname) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+#ifdef HAVE__WUTIME64
+  ret = _wutime64(fname, times);
+#else
+  ret = _wutime(fname, times);
+#endif
+
+  free(fname);
+
+  return ret;
+}
+
 PMOD_EXPORT int debug_fd_truncate(const char *file, INT64 len)
 {
   p_wchar1 *fname = pike_dwim_utf8_to_utf16(file);
@@ -1450,6 +1490,191 @@ PMOD_EXPORT int debug_fd_truncate(const char *file, INT64 len)
   }
   CloseHandle(h);
   return 0;
+}
+
+PMOD_EXPORT int debug_fd_link(const char *oldpath, const char *newpath)
+{
+  if (!Pike_NT_CreateHardLinkW) {
+    errno = ENOTSUPP;
+    return -1;
+  }
+
+  {
+    p_wchar1 *oname = pike_dwim_utf8_to_utf16(oldpath);
+    ONERROR uwp;
+    p_wchar1 *nname;
+    int ret = 0;
+
+    SET_ONERROR(uwp, free, oname);
+
+    /* FIXME: Consider prefixing with "\\\\?\\" (4 characters)
+     *        to allow paths longer than 260 characters.
+     */
+    nname = pike_dwim_utf8_to_utf16(newpath);
+
+    if (!Pike_NT_CreateHardLinkW(nname, oname, NULL)) {
+      set_errno_from_win32_error(GetLastError());
+      ret = -1;
+    }
+
+    free(nname);
+    CALL_AND_UNSET_ONERROR(uwp);
+
+    return ret;
+  }
+}
+
+PMOD_EXPORT int debug_fd_symlink(const char *target, const char *linkpath)
+{
+  if (!Pike_NT_CreateSymbolicLinkW) {
+    errno = ENOTSUPP;
+    return -1;
+  }
+
+  {
+    p_wchar1 *tname = pike_dwim_utf8_to_utf16(target);
+    ONERROR uwp;
+    p_wchar1 *lnk;
+    int ret = 0;
+
+    SET_ONERROR(uwp, free, tname);
+
+    /* FIXME: Consider prefixing with "\\\\?\\" (4 characters)
+     *        to allow paths longer than 260 characters.
+     */
+    lnk = pike_dwim_utf8_to_utf16(linkpath);
+
+    if (!Pike_NT_CreateSymbolicLinkW(tname, lnk,
+                                     SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) &&
+        ((GetLastError() != ERROR_DIRECTORY_NOT_SUPPORTED) ||
+         !Pike_NT_CreateSymbolicLinkW(tname, lnk,
+                                      SYMBOLIC_LINK_FLAG_DIRECTORY |
+                                      SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))) {
+      set_errno_from_win32_error(GetLastError());
+      ret = -1;
+    }
+
+    free(lnk);
+    CALL_AND_UNSET_ONERROR(uwp);
+
+    return ret;
+  }
+}
+
+/* NB: Copied from
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_reparse_data_buffer
+ * in order to support compilation with old SDKs.
+ *
+ * The REPARSE_DATA_BUFFER type seems to typically be defined in <Ntifs.h>.
+ */
+struct Pike_NT_REPARSE_DATA_BUFFER_struct {
+  ULONG  ReparseTag;
+  USHORT ReparseDataLength;
+  USHORT Reserved;
+  union {
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      ULONG  Flags;
+      WCHAR  PathBuffer[1];
+    } SymbolicLinkReparseBuffer;
+    struct {
+      USHORT SubstituteNameOffset;
+      USHORT SubstituteNameLength;
+      USHORT PrintNameOffset;
+      USHORT PrintNameLength;
+      WCHAR  PathBuffer[1];
+    } MountPointReparseBuffer;
+    struct {
+      UCHAR DataBuffer[1];
+    } GenericReparseBuffer;
+  } DUMMYUNIONNAME;
+};
+
+PMOD_EXPORT ptrdiff_t debug_fd_readlink(const char *file,
+                                        char *buf, size_t bufsiz)
+{
+  p_wchar1 *fname = pike_dwim_utf8_to_utf16(file);
+  HANDLE h;
+  DWORD bytes = 0;
+  int ret = -1;
+  int e = EINVAL; /* Not a symlink. */
+
+  if (!fname) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+  h = CreateFileW(fname, 0, 0, 0, OPEN_EXISTING,
+                  FILE_FLAG_OPEN_REPARSE_POINT|
+                  FILE_FLAG_BACKUP_SEMANTICS, 0);
+
+  if (h != INVALID_HANDLE_VALUE) {
+    struct Pike_NT_REPARSE_DATA_BUFFER_struct *reparse;
+    size_t sz = sizeof(struct Pike_NT_REPARSE_DATA_BUFFER_struct) +
+      bufsiz * 2 + 2;
+
+    e = ENOMEM;
+    if ((reparse = malloc(sz))) {
+      e = EINVAL;
+      if (DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, 0, 0,
+                          reparse, sz, &bytes, 0)) {
+        p_wchar1 *dest = NULL;
+        size_t destlen = 0;
+        p_wchar0 *utf8_buf;
+
+        switch(reparse->ReparseTag) {
+        case IO_REPARSE_TAG_SYMLINK:
+          /* Adjust the struct to be what you typically expect... */
+          reparse->SymbolicLinkReparseBuffer.SubstituteNameOffset /= 2;
+          reparse->SymbolicLinkReparseBuffer.SubstituteNameLength /= 2;
+
+          dest = reparse->SymbolicLinkReparseBuffer.PathBuffer +
+            reparse->SymbolicLinkReparseBuffer.SubstituteNameOffset;
+          destlen = reparse->SymbolicLinkReparseBuffer.SubstituteNameLength;
+          break;
+        case IO_REPARSE_TAG_MOUNT_POINT:
+          /* Adjust the struct to be what you typically expect... */
+          reparse->MountPointReparseBuffer.SubstituteNameOffset /= 2;
+          reparse->MountPointReparseBuffer.SubstituteNameLength /= 2;
+
+          dest = reparse->MountPointReparseBuffer.PathBuffer +
+            reparse->MountPointReparseBuffer.SubstituteNameOffset;
+          destlen = reparse->MountPointReparseBuffer.SubstituteNameLength;
+          break;
+        }
+
+        if (dest) {
+          /* NUL terminate. */
+          dest[destlen] = 0;
+
+          e = ENOMEM;
+          utf8_buf = pike_utf16_to_utf8(dest);
+
+          if (utf8_buf) {
+            strncpy(buf, utf8_buf, bufsiz);
+            ret = strlen(utf8_buf) + 1;	/* Include NUL. */
+            if ((size_t)ret > bufsiz) ret = bufsiz;
+            e = 0;
+
+            free(utf8_buf);
+          }
+        }
+      }
+      free(reparse);
+    }
+  }
+
+  CloseHandle(h);
+
+  if (e) {
+    errno = e;
+    return -1;
+  }
+
+  return ret;
 }
 
 PMOD_EXPORT int debug_fd_rmdir(const char *dir)
@@ -2000,17 +2225,19 @@ PMOD_EXPORT FD debug_fd_accept(FD fd, struct sockaddr *addr,
 PMOD_EXPORT int PIKE_CONCAT(debug_fd_,NAME) X1 { \
   SOCKET s; \
   int ret; \
+  int err; \
   FDDEBUG(fprintf(stderr, "fd_" #NAME "(%d, ...)...\n", fd)); \
   if (fd_to_socket(fd, &s, 0) < 0) return -1;		      \
   FDDEBUG(fprintf(stderr, #NAME " on %d (%ld)\n", \
 		  fd, (long)(ptrdiff_t)s)); \
   ret = NAME X2; \
+  err = WSAGetLastError(); \
   release_fd(fd); \
   if(ret == SOCKET_ERROR) { \
-    set_errno_from_win32_error (WSAGetLastError()); \
+    set_errno_from_win32_error (err); \
     ret = -1; \
   } \
-  FDDEBUG(fprintf(stderr, #NAME " returned %d (%d)\n", ret, errno)); \
+  FDDEBUG(fprintf(stderr, #NAME " returned %d (%d:%d)\n", ret, err, errno)); \
   return ret; \
 }
 
@@ -2190,7 +2417,7 @@ PMOD_EXPORT ptrdiff_t debug_fd_writev(FD fd, struct iovec *iov, ptrdiff_t n)
   return 0;
 }
 
-PMOD_EXPORT ptrdiff_t debug_fd_read(FD fd, void *to, ptrdiff_t len)
+PMOD_EXPORT ptrdiff_t debug_fd_read(FD fd, void *to, size_t len)
 {
   int type;
   DWORD ret;
@@ -2487,7 +2714,6 @@ PMOD_EXPORT int debug_fd_flock(FD fd, int oper)
 
   return 0;
 }
-
 
 /* Note: s->st_ctime is set to the file creation time. It should
  * probably be the last access time to be closer to the unix

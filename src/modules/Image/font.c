@@ -1,4 +1,4 @@
-/*
+/* -*- mode: C; c-basic-offset: 3; -*-
 || This file is part of Pike. For copyright information see COPYRIGHT.
 || Pike is distributed under GPL, LGPL and MPL. See the file COPYING
 || for more information.
@@ -304,7 +304,7 @@ void font_load(INT32 args)
   int size = 0;
   char *filename = NULL;
 
-  get_all_args(NULL, args, ".%s", &filename);
+  get_all_args(NULL, args, ".%c", &filename);
 
   if (!filename)
   {
@@ -819,7 +819,7 @@ void font_set_yspacing_scale(INT32 args)
   if(!THIS) Pike_error("font->set_yspacing_scale(): No font loaded.\n");
   get_all_args(NULL, args, "%f", &f);
 
-  if(f <= 0.0) f=0.1;
+  if (f <= 0.0) f = (FLOAT_TYPE)0.1;
   THIS->yspacing_scale = (double)f;
 }
 

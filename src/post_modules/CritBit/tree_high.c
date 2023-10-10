@@ -1,3 +1,4 @@
+/* -*- mode: C; c-basic-offset: 4; -*- */
 static inline void cb_print_key(struct string_builder *, const cb_key);
 static inline size_t _low_cb_check_node(cb_node_t node, const char *, int);
 
@@ -222,8 +223,8 @@ static inline size_t _low_cb_check_node(cb_node_t node,
 
     if (len + CB_HAS_VALUE(node) != node->size) {
 	/* Pike_error("Found node with wrong size. is: %p\n", node); */
-	Pike_error("%s:%d Found node with wrong size. is: 0x%08X\n",
-		   file, line, node);
+        Pike_error("%s:%d Found node with wrong size. is: 0x%08lX\n",
+                   file, line, (unsigned long)(size_t)node);
     }
 
     return node->size;

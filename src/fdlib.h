@@ -34,6 +34,14 @@
 #include <socket.h>
 #endif /* HAVE_SOCKET_H */
 
+#ifdef HAVE_UTIME_H
+#include <utime.h>
+#endif
+
+#ifdef HAVE_SYS_UTIME_H
+#include <sys/utime.h>
+#endif
+
 #include "pike_netlib.h"
 
 #define fd_INTERPROCESSABLE   1
@@ -57,6 +65,7 @@
 #define TTY_CAPABILITIES (fd_TTY | fd_INTERPROCESSABLE | fd_BIDIRECTIONAL | fd_CAN_NONBLOCK)
 
 #include <winbase.h>
+#include <winioctl.h>
 
 typedef int FD;
 
@@ -119,6 +128,12 @@ struct winsize {
 #define TIOCSWINSZ	_IOW('T', 0x14, struct winsize)
 #endif
 
+#ifdef HAVE__WUTIME64
+#define fd_utimbuf	__utimbuf64
+#else
+#define fd_utimbuf	_utimbuf
+#endif
+
 #define SOCKFUN1(NAME,T1) PMOD_EXPORT int PIKE_CONCAT(debug_fd_,NAME) (FD,T1);
 #define SOCKFUN2(NAME,T1,T2) PMOD_EXPORT int PIKE_CONCAT(debug_fd_,NAME) (FD,T1,T2);
 #define SOCKFUN3(NAME,T1,T2,T3) PMOD_EXPORT int PIKE_CONCAT(debug_fd_,NAME) (FD,T1,T2,T3);
@@ -132,7 +147,11 @@ struct winsize {
         debug_fd_query_properties(dmalloc_touch_fd(fd),(Y))
 #define fd_stat(F,BUF) debug_fd_stat(F,BUF)
 #define fd_lstat(F,BUF) debug_fd_stat(F,BUF)
+#define fd_utime(F, BUF)	debug_fd_utime(F, BUF)
 #define fd_truncate(F,LEN)	debug_fd_truncate(F,LEN)
+#define fd_link(OLD,NEW)	debug_fd_link(OLD,NEW)
+#define fd_symlink(F,PATH)	debug_fd_symlink(F,PATH)
+#define fd_readlink(F,B,SZ)	debug_fd_readlink(F,B,SZ)
 #define fd_rmdir(DIR)	debug_fd_rmdir(DIR)
 #define fd_unlink(FILE)	debug_fd_unlink(FILE)
 #define fd_mkdir(DIR,MODE)	debug_fd_mkdir(DIR,MODE)
@@ -188,7 +207,12 @@ p_wchar1 *low_dwim_utf8_to_utf16(const p_wchar0 *str, size_t len);
 PMOD_EXPORT p_wchar1 *pike_dwim_utf8_to_utf16(const p_wchar0 *str);
 PMOD_EXPORT p_wchar0 *pike_utf16_to_utf8(const p_wchar1 *str);
 PMOD_EXPORT int debug_fd_stat(const char *file, PIKE_STAT_T *buf);
+PMOD_EXPORT int debug_fd_utime(const char *file, struct fd_utimbuf *buf);
 PMOD_EXPORT int debug_fd_truncate(const char *file, INT64 len);
+PMOD_EXPORT int debug_fd_link(const char *oldpath, const char *newpath);
+PMOD_EXPORT int debug_fd_symlink(const char *target, const char *linkpath);
+PMOD_EXPORT ptrdiff_t debug_fd_readlink(const char *file,
+                                        char *buf, size_t bufsiz);
 PMOD_EXPORT int debug_fd_rmdir(const char *dir);
 PMOD_EXPORT int debug_fd_unlink(const char *file);
 PMOD_EXPORT int debug_fd_mkdir(const char *dir, int mode);
@@ -215,7 +239,7 @@ SOCKFUN1(listen, int)
 PMOD_EXPORT int debug_fd_close(FD fd);
 PMOD_EXPORT ptrdiff_t debug_fd_write(FD fd, void *buf, ptrdiff_t len);
 PMOD_EXPORT ptrdiff_t debug_fd_writev(FD fd, struct iovec *iov, ptrdiff_t n);
-PMOD_EXPORT ptrdiff_t debug_fd_read(FD fd, void *to, ptrdiff_t len);
+PMOD_EXPORT ptrdiff_t debug_fd_read(FD fd, void *to, size_t len);
 PMOD_EXPORT PIKE_OFF_T debug_fd_lseek(FD fd, PIKE_OFF_T pos, int where);
 PMOD_EXPORT int debug_fd_ftruncate(FD fd, PIKE_OFF_T len);
 PMOD_EXPORT int debug_fd_flock(FD fd, int oper);
@@ -404,16 +428,22 @@ typedef off_t PIKE_OFF_T;
 #define fd_LARGEFILE 0
 #endif /* O_LARGEFILE */
 
+#define fd_utimbuf	utimbuf
+
 #define fd_isatty(F) isatty(F)
 #define fd_query_properties(X,Y) ( fd_INTERPROCESSABLE | (Y))
 
 #define fd_stat(F,BUF) stat(F,BUF)
 #define fd_lstat(F,BUF) lstat(F,BUF)
+#define fd_utime(F, BUF)	utime(F, BUF)
 #ifdef HAVE_TRUNCATE64
 #define fd_truncate(F,LEN)	truncate64(F,LEN)
 #else
 #define fd_truncate(F,LEN)	truncate(F,LEN)
 #endif
+#define fd_link(OLD,NEW)	link(OLD,NEW)
+#define fd_symlink(F,PATH)	symlink(F,PATH)
+#define fd_readlink(F,B,SZ)	readlink(F,B,SZ)
 #define fd_rmdir(DIR)	rmdir(DIR)
 #define fd_unlink(FILE)	unlink(FILE)
 #if MKDIR_ARGS == 2

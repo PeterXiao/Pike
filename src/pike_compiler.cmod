@@ -439,11 +439,13 @@ static void do_yyparse(void)
  *!       @endint
  *!   @endul
  *!
- *!   If there's no master object yet, the diagnostic is output to
- *!   @[Stdio.stderr].
+ *!   If there's no master object yet, the diagnostic is UTF8-encoded
+ *!   and output to @[Stdio.stderr].
  *!
  *! @note
  *!   In Pike 7.8 and earlier @[MasterObject()->report()] was not called.
+ *!
+ *!   In Pike 8.0 the fallback output was not UTF8-encoded.
  *!
  *! @seealso
  *!   @[PikeCompiler()->report()]
@@ -470,7 +472,7 @@ static void f_reporter_report(INT32 args)
     f_sprintf(args - 4);
     args = 5;
   }
-  get_all_args(NULL, args, "%d%W%+%W%W",
+  get_all_args(NULL, args, "%d%t%+%t%t",
 	       &level, &filename, &linenumber, &subsystem, &message);
 
   /* Ignore informational level messages */
@@ -487,16 +489,19 @@ static void f_reporter_report(INT32 args)
 	args++;
       }
     } else {
-      const char *fname = filename->str;
-      if (filename->size_shift) {
-	fname = "WIDE";
-      }
+      ref_push_string(filename);
+      f_string_to_utf8(1);
+      ref_push_string(message);
+      f_string_to_utf8(1);
+      args += 2;
       if (level >= REPORT_ERROR) {
 	fprintf(stderr, "%s:%ld: Error: %s\n",
-		fname, (long)linenumber, message->str);
+                Pike_sp[-2].u.string->str, (long)linenumber,
+                Pike_sp[-1].u.string->str);
       } else {
 	fprintf(stderr, "%s:%ld: Warning: %s\n",
-		fname, (long)linenumber, message->str);
+                Pike_sp[-2].u.string->str, (long)linenumber,
+                Pike_sp[-1].u.string->str);
       }
       fflush(stderr);
     }
@@ -640,7 +645,7 @@ static void f_compilation_env_resolv(INT32 args)
   struct object *handler = NULL;
   struct object *compat_handler = NULL;
 
-  get_all_args(NULL, args, "%W%W.%O%O",
+  get_all_args(NULL, args, "%t%t.%O%O",
 	       &ident, &filename, &handler, &compat_handler);
 
   if(get_master())
@@ -916,6 +921,7 @@ static void node_reporter(struct ba_iterator * it, void * data)
 
 static void free_compilation(struct compilation *c)
 {
+  if (!c) return;
   debug_malloc_touch(c);
   if (c->prog) {
     free_string(c->prog);
@@ -1345,8 +1351,6 @@ static void run_cleanup(struct compilation *c, int delayed)
 #endif
 #endif /* PIKE_DEBUG */
 
-  unlock_pike_compiler();
-
   CDFPRINTF("th(%ld) %p run_cleanup(): "
             "lock_depth:%d, compilation_depth:%d\n",
             (long)th_self(), c->target,
@@ -1427,7 +1431,7 @@ static void run_cleanup(struct compilation *c, int delayed)
 #endif
 	if(SETJMP(rec))
 	{
-	  handle_compile_exception (NULL);
+          handle_compile_exception("Failed to initialize placeholder object.");
 	  debug_malloc_touch(c->placeholder);
 	  zap_placeholder(c);
 	}else{
@@ -1445,6 +1449,8 @@ static void run_cleanup(struct compilation *c, int delayed)
   verify_supporters();
   c->flags &= ~(COMPILER_BUSY);
   c->flags |= COMPILER_DONE;
+
+  unlock_pike_compiler();
 }
 
 static int call_delayed_pass2(struct Supporter *s, int finish)
@@ -1578,11 +1584,13 @@ static void f_compilation_report(INT32 args)
 {
   struct compilation *c = THIS_COMPILATION;
   int level;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct pike_string *filename;
   INT_TYPE linenumber;
   struct pike_string *subsystem;
   struct pike_string *message;
   struct object *handler = NULL;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
   /* FIXME: get_all_args() ought to have a marker
@@ -1622,6 +1630,7 @@ static void f_compilation_report(INT32 args)
   apply_external(1, CE_REPORT_FUN_NUM, args);
   return;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
  apply_handler:
   /* Ignore informational level messages */
   if (level < REPORT_WARNING) return;
@@ -1629,7 +1638,7 @@ static void f_compilation_report(INT32 args)
     f_sprintf(args - 4);
     args = 5;
   }
-  get_all_args(NULL, args, "%d%W%+%W%W",
+  get_all_args(NULL, args, "%d%t%+%t%t",
 	       &level, &filename, &linenumber,
 	       &subsystem, &message);
 
@@ -1638,6 +1647,7 @@ static void f_compilation_report(INT32 args)
   ref_push_string(message);
   apply_low(handler, fun, 3);
   stack_pop_n_elems_keep_top(args);
+#endif /* SUPPORT_COMPILER_HANDLERS */
 }
 
 /*! @decl void create(string|void source, @
@@ -1708,7 +1718,7 @@ static void f_compilation_create(INT32 args)
 
   STACK_LEVEL_START(args);
 
-  get_all_args(NULL, args, ".%W%O%d%d%P%O",
+  get_all_args(NULL, args, ".%t%O%d%d%P%O",
 	       &aprog, &ahandler,
 	       &amajor, &aminor,
 	       &atarget, &aplaceholder);
@@ -1787,8 +1797,6 @@ static void f_compilation_compile(INT32 args)
 
   debug_malloc_touch(c);
 
-  verify_supporters();
-
   if (c->flags & COMPILER_DONE) {
     /* Already compiled. */
     pop_n_elems(args);
@@ -1817,6 +1825,8 @@ static void f_compilation_compile(INT32 args)
 #ifdef PIKE_THREADS
   c->saved_lock_depth = lock_depth;
 #endif
+
+  verify_supporters();
 
   init_supporter(& c->supporter,
 		 (supporter_callback *) call_delayed_pass2,
@@ -1897,10 +1907,12 @@ static void f_compilation_resolv(INT32 args)
 {
   struct pike_string *sym;
   struct compilation *c = THIS_COMPILATION;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct object *handler;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
-  get_all_args(NULL, args, "%W", &sym);
+  get_all_args(NULL, args, "%t", &sym);
 
   ref_push_string(sym);
   ref_push_string(c->lex.current_file);
@@ -1932,7 +1944,9 @@ static void f_compilation_resolv(INT32 args)
 static void f_compilation_get_compilation_handler(INT32 PIKE_UNUSED(args))
 {
   struct compilation *c = THIS_COMPILATION;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct object *handler;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
 #ifdef SUPPORT_COMPILER_HANDLERS
@@ -1971,7 +1985,9 @@ static void f_compilation_get_compilation_handler(INT32 PIKE_UNUSED(args))
 static void f_compilation_get_default_module(INT32 args)
 {
   struct compilation *c = THIS_COMPILATION;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct object *handler;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
 #ifdef SUPPORT_COMPILER_HANDLERS
@@ -2114,7 +2130,9 @@ static void f_compilation_change_compiler_compatibility(INT32 args)
 static void f_compilation_handle_inherit(INT32 args)
 {
   struct compilation *c = THIS_COMPILATION;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct object *handler;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
   if (args > 1) pop_n_elems(args-1);
@@ -2150,7 +2168,9 @@ static void f_compilation_handle_inherit(INT32 args)
 static void f_compilation_handle_import(INT32 args)
 {
   struct compilation *c = THIS_COMPILATION;
+#ifdef SUPPORT_COMPILER_HANDLERS
   struct object *handler;
+#endif /* SUPPORT_COMPILER_HANDLERS */
   int fun = -1;
 
   if (args > 1) pop_n_elems(args-1);
@@ -2227,7 +2247,7 @@ static void f_compilation_pop_type_attribute(INT32 args)
   }
 #endif
 
-  get_all_args(NULL, args, "%W%*%*.%m", &attr, &a, &b, &state);
+  get_all_args(NULL, args, "%t%*%*.%m", &attr, &a, &b, &state);
 
   if (Pike_compiler->compiler_pass == COMPILER_PASS_LAST) {
     MAKE_CONST_STRING(deprecated_string, "deprecated");
@@ -2269,7 +2289,7 @@ static void f_compilation_index_type_attribute(INT32 args)
   struct compilation *c = THIS_COMPILATION;
   struct pike_string *deprecated_string;
 
-  get_all_args(NULL, args, "%W%*%*", &attr, &a, &b);
+  get_all_args(NULL, args, "%t%*%*", &attr, &a, &b);
 
   if (Pike_compiler->compiler_pass == COMPILER_PASS_LAST) {
     MAKE_CONST_STRING(deprecated_string, "deprecated");
@@ -2351,7 +2371,7 @@ static void f_compilation_push_type_attribute(INT32 args)
   }
 #endif
 
-  get_all_args(NULL, args, "%W%*%*.%m", &attr, &a, &b, &state);
+  get_all_args(NULL, args, "%t%*%*.%m", &attr, &a, &b, &state);
 
   if (TYPEOF(*a) != PIKE_T_TYPE) {
     SIMPLE_ARG_TYPE_ERROR(NULL, 2, "type");
@@ -2477,7 +2497,7 @@ static void f_compilation_apply_type_attribute(INT32 args)
   }
 #endif
 
-  get_all_args(NULL, args, "%W%*.%m", &attr, &a, &state);
+  get_all_args(NULL, args, "%t%*.%m", &attr, &a, &state);
 
   if (a && (TYPEOF(*a) != PIKE_T_TYPE)) {
     a = NULL;
@@ -2563,7 +2583,7 @@ static void f_compilation_apply_attribute_constant(INT32 args)
   }
 #endif
 
-  get_all_args(NULL, args, "%S%*", &attribute, &sval);
+  get_all_args(NULL, args, "%n%*", &attribute, &sval);
 
   MAKE_CONST_STRING(test, "sscanf_input");
   if (attribute == test) {
@@ -2611,7 +2631,6 @@ static void f_compilation_apply_attribute_constant(INT32 args)
  */
 static void f_compilation_eval_type_attribute(INT32 args)
 {
-  struct compilation *c;
   struct pike_string *attribute;
   struct pike_string *test;
   struct svalue *sval;
@@ -2629,7 +2648,7 @@ static void f_compilation_eval_type_attribute(INT32 args)
   }
 #endif
 
-  get_all_args(NULL, args, "%S%*%m", &attribute, &sval, &state);
+  get_all_args(NULL, args, "%n%*%m", &attribute, &sval, &state);
 
   if (sval && (TYPEOF(*sval) != PIKE_T_TYPE)) {
     sval = NULL;

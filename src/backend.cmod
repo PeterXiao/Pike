@@ -512,10 +512,19 @@ PIKECLASS Backend
     CVAR INT32 pos;
     CVAR size_t fun_hval;
     CVAR struct timeval tv;
+
+    /* The {next,prev}_fun chain is a list of call_outs of
+     * functions having the same fun_hval % hash_size.
+     */
     CVAR struct Backend_CallOut_struct *next_fun;
     CVAR struct Backend_CallOut_struct **prev_fun;
+
+    /* The {next,prev}_arr chain is a list of call_outs that
+     * have args arrays that hash to the same bucket.
+     */
     CVAR struct Backend_CallOut_struct *next_arr;
     CVAR struct Backend_CallOut_struct **prev_arr;
+
     /*! @decl protected array args
      *!
      *! The array containing the function and arguments.
@@ -1197,7 +1206,7 @@ PIKECLASS Backend
    static int backend_find_call_out(struct Backend_struct *me,
 				    struct array *co_info)
      {
-       size_t hval, fun_hval;
+       size_t hval;
        struct Backend_CallOut_struct *c;
 
        if(!co_info || !me->num_pending_calls) return -1;
@@ -1385,7 +1394,6 @@ PIKECLASS Backend
      {
        int e;
        struct array *ret;
-       struct timeval now;
        ONERROR err;
        DECLARE_PROTECT_CALL_OUTS;
 
@@ -1394,29 +1402,35 @@ PIKECLASS Backend
        ret=allocate_array_no_init(0, me->num_pending_calls);
        SET_ONERROR(err, do_free_array, ret);
        ret->type_field = BIT_ARRAY;
-       if(me->num_pending_calls) INACCURATE_GETTIMEOFDAY(&now);
-       for(e=0;e<me->num_pending_calls;e++)
-       {
-	 struct array *v;
-	 v=allocate_array_no_init(CALL(e)->args->size+2, 0);
-	 ITEM(v)[0].u.integer=CALL(e)->tv.tv_sec - now.tv_sec;
 
-	 /* FIXME: ITEM(v)[1] used to be the current object
-	  *        from when the call_out was created, but
-	  *        that is always the backend since the
-	  *        backend.cmod rewrite.
-	  *        Now we just leave it zero.
-	  */
-	 v->type_field = BIT_INT;
+       if(me->num_pending_calls) {
+         struct timeval now;
+         INACCURATE_GETTIMEOFDAY(&now);
 
-	 v->type_field |=
-	   assign_svalues_no_free(ITEM(v)+2,
-				  ITEM(CALL(e)->args),
-				  CALL(e)->args->size,BIT_MIXED);
+         for(e=0;e<me->num_pending_calls;e++)
+         {
+           struct array *v;
+           v=allocate_array_no_init(CALL(e)->args->size+2, 0);
+           ITEM(v)[0].u.integer=CALL(e)->tv.tv_sec - now.tv_sec;
 
-	 SET_SVAL(ITEM(ret)[e], T_ARRAY, 0, array, v);
-	 ret->size++;
+           /* FIXME: ITEM(v)[1] used to be the current object
+            *        from when the call_out was created, but
+            *        that is always the backend since the
+            *        backend.cmod rewrite.
+            *        Now we just leave it zero.
+            */
+           v->type_field = BIT_INT;
+
+           v->type_field |=
+             assign_svalues_no_free(ITEM(v)+2,
+                                    ITEM(CALL(e)->args),
+                                    CALL(e)->args->size,BIT_MIXED);
+
+           SET_SVAL(ITEM(ret)[e], T_ARRAY, 0, array, v);
+           ret->size++;
+         }
        }
+
        UNSET_ONERROR(err);
        UNPROTECT_CALL_OUTS();
        return ret;
@@ -1729,7 +1743,8 @@ PIKECLASS Backend
        me->update_fd_set_handler(me, me->handler_data,
 				 fd, old_events, new_events, flags);
      } else {
-       Pike_fatal("No update_fd_set_handler set[%p, %d, 0x%04x, 0x%04x].\n");
+       Pike_fatal("No update_fd_set_handler set[%p, %d, 0x%04x, 0x%04x].\n",
+                  me, fd, old_events, new_events);
      }
    }
 

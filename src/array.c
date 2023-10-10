@@ -414,10 +414,10 @@ PMOD_EXPORT void array_atomic_get_set(struct array *a, INT32 i,
 
   if(i<0 || i>=a->size) {
     if (a->size) {
-      Pike_error("Index %"PRINTPIKEINT"d is out of array range "
+      Pike_error("Index %d is out of array range "
 		 "%d..%d.\n", p, -a->size, a->size-1);
     } else {
-      Pike_error("Attempt to index the empty array with %"PRINTPIKEINT"d.\n", p);
+      Pike_error("Attempt to index the empty array with %d.\n", p);
     }
   }
 
@@ -1471,8 +1471,36 @@ INT32 set_lookup(struct array *a, struct svalue *s)
   return low_lookup(a,s,set_svalue_cmpfun);
 }
 
-INT32 switch_lookup(struct array *a, struct svalue *s)
+/**
+ * Lookup an svalue in a switch table.
+ *
+ * Returns the array index if found, and
+ * if not found the inverse of the index
+ * for the first larger element or the
+ * inverse of the size of the array if
+ * the svalue is larger than all elements
+ * of the array.
+ */
+INT32 switch_lookup(struct svalue *table, struct svalue *s)
 {
+  struct array *a;
+
+  if (TYPEOF(*table) == PIKE_T_MAPPING) {
+    s = low_mapping_lookup(table->u.mapping, s);
+    if (s && (TYPEOF(*s) == PIKE_T_INT)) {
+      return s->u.integer;
+    }
+    return -1;
+  }
+
+#ifdef PIKE_DEBUG
+  if (TYPEOF(*table) != PIKE_T_ARRAY) {
+    Pike_fatal("Unsupported switch lookup table type: %s.\n",
+               get_name_of_type(TYPEOF(*table)));
+  }
+#endif
+  a = table->u.array;
+
   /* face it, it's not there */
 #ifdef PIKE_DEBUG
   if(d_flag > 1)  array_check_type_field(a);
@@ -2581,7 +2609,7 @@ PMOD_EXPORT struct pike_string *implode(struct array *a,
 	   continue;		    /* skip zero (strings) */
 	 /* FALLTHROUGH */
       default:
-	Pike_error("Array element %d is not a string\n", ae-a->item);
+        Pike_error("Array element %td is not a string\n", ae-a->item);
 	break;
       case T_STRING:
 	delims++;

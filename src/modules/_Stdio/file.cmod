@@ -157,7 +157,7 @@
  * gcc with -O3 generates very bloated code for the functions in this file. One rather extreme example
  * is file_open, which ends up having 32 call sites of open(2).
  */
-#if defined(__GNUC__) && !defined(__clang__)
+#ifdef HAVE_PRAGMA_GCC_OPTIMIZE
 #pragma GCC optimize "-Os"
 #endif
 
@@ -431,6 +431,7 @@ static void fd_backtick__fd(INT32 args)
  *! @decl mixed _write_callback
  *! @decl mixed _read_oob_callback
  *! @decl mixed _write_oob_callback
+ *! @decl mixed _error_callback
  *! @decl mixed _fs_event_callback
  *!
  *! Callback functions installed by @[Stdio.File()->set_callbacks()] et al.
@@ -693,11 +694,11 @@ static void close_fd(int quiet)
 	    if (SETJMP (jmp))
 	      call_handle_error();
 	    else {
-	      Pike_error("Failed to close file: %S\n", Pike_sp[-1].u.string);
+              Pike_error("Failed to close file: %pS\n", Pike_sp[-1].u.string);
 	    }
 	    UNSETJMP (jmp);
 	  } else {
-	    Pike_error("Failed to close file: %S\n", Pike_sp[-1].u.string);
+            Pike_error("Failed to close file: %pS\n", Pike_sp[-1].u.string);
 	  }
 	  break;
 
@@ -1795,6 +1796,73 @@ static void file_read_oob(INT32 args)
   THIS->box.revents &= ~(PIKE_BIT_FD_READ|PIKE_BIT_FD_READ_OOB);
 }
 
+#ifdef HAVE_FCHDIR
+/*! @decl int(0..1) cd(string(8bit)|void relpath)
+ *!
+ *!   Change current directory relative to this file.
+ *!
+ *! @returns
+ *!   Returns @expr{1@} on success and @expr{0@} (zero)
+ *!   on failure.
+ *!
+ *! @seealso
+ *!   @[predef::cd()]
+ */
+PIKEFUN int(0..1) cd(string(8bit)|void relpath)
+{
+  int fd = FD;
+  int close_fd = -1;
+  int ret = 0;
+
+  if(fd < 0) {
+    Pike_error("File not open.\n");
+  }
+
+#ifdef HAVE_OPENAT
+  /* NB: Several OSes (eg Solaris 8, MacOS X 10.5, Linux/glibc 2.3.x)
+   *     have fchdir(2) but not openat(2).
+   */
+  if (relpath) {
+    close_fd = fd = openat(fd, relpath->str, O_RDONLY, 0);
+
+    if (fd < 0) goto fail;
+  }
+#endif /* HAVE_OPENAT */
+
+  ret = !fchdir(fd);
+
+  if (!ret) goto fail;
+
+  SAFE_MAYBE_APPLY_MASTER("zap_getcwd_cache", 0);
+  args++;
+
+  if (relpath) {
+#ifdef HAVE_OPENAT
+    close(fd);
+#else
+    ret = !chdir(relpath->str);
+
+    if (!ret) goto fail;
+#endif
+  }
+
+  RETURN 1;
+
+ fail:
+  {
+    int e = errno;
+
+    if (close_fd >= 0) {
+      close(close_fd);
+    }
+
+    ERRNO = errno = e;
+
+    RETURN 0;
+  }
+}
+#endif /* HAVE_FCHDIR */
+
 static short get_fd_event_flags(struct my_file *f)
 {
   if(f->box.backend)
@@ -1847,6 +1915,7 @@ CBFUNCS(read_callback, PIKE_FD_READ)
 CBFUNCS(write_callback, PIKE_FD_WRITE)
 CBFUNCS(read_oob_callback, PIKE_FD_READ_OOB)
 CBFUNCS(write_oob_callback, PIKE_FD_WRITE_OOB)
+CBFUNCS(error_callback, PIKE_FD_ERROR)
 CBFUNCS2(fs_event_callback, PIKE_FD_FS_EVENT)
 
 
@@ -3130,7 +3199,7 @@ static void file_openat(INT32 args)
   if((dir_fd = FD) < 0)
     Pike_error("File not open.\n");
 
-  get_all_args(NULL, args, "%S.%S%d", &str, &flag_str, &access);
+  get_all_args(NULL, args, "%n.%n%d", &str, &flag_str, &access);
 
   flags = flag_str ? parse(flag_str->str) : FILE_READ;
 
@@ -3592,7 +3661,7 @@ static void file_statat(INT32 args)
   if(FD < 0)
     Pike_error("File not open.\n");
 
-  get_all_args(NULL, args, "%S.%d", &path, &nofollow);
+  get_all_args(NULL, args, "%n.%d", &path, &nofollow);
 
   if (string_has_null(path)) {
     /* Filenames with NUL are not supported. */
@@ -3647,7 +3716,7 @@ static void file_unlinkat(INT32 args)
   if((dir_fd = FD) < 0)
     Pike_error("File not open.\n");
 
-  get_all_args(NULL, args, "%S", &str);
+  get_all_args(NULL, args, "%n", &str);
 
   if (string_has_null(str)) {
     /* Filenames with NUL are not supported. */
@@ -3682,6 +3751,130 @@ static void file_unlinkat(INT32 args)
 #endif /* HAVE_UNLINKAT */
 #endif /* HAVE_FSTATAT */
 
+#ifdef HAVE_LINKAT
+/*! @decl void hardlinkat(string(8bit) from, string(8bit) to, @
+ *!                       Stdio.File|void tofd)
+ *!
+ *! Create a hardlink named @[to] from the file @[from], where
+ *! @[from] is relative to this file, and @[to] is relative to
+ *! @[tofd] unless it is not set in which case it is also relative
+ *! to this file.
+ *!
+ *! @note
+ *!   This function is not available on all platforms.
+ *!
+ *! @seealso
+ *!   @[hardlink()], @[symlinkat()], @[unlinkat()]
+ */
+PIKEFUN void hardlinkat(string(8bit) from, string(8bit) to, object|void tofd)
+{
+  int ffd = FD;
+  int tfd = FD;
+  int err;
+
+  if (tofd) {
+    struct my_file *tfds = get_file_storage(tofd);
+
+    if (!tfds || (tfds->box.fd < 0)) {
+      Pike_error("Tofd is not an open file.\n");
+    }
+
+    tfd = tfds->box.fd;
+  }
+
+  do {
+    THREADS_ALLOW_UID();
+    err = linkat(ffd, from->str, tfd, to->str, 0);
+    THREADS_DISALLOW_UID();
+    if (err >= 0 || errno != EINTR) break;
+    check_threads_etc();
+  } while (1);
+
+  if (err < 0) {
+    report_os_error("hardlinkat");
+  }
+  pop_n_elems(args);
+}
+#endif /* HAVE_LINKAT */
+
+#ifdef HAVE_SYMLINKAT
+/*! @decl void symlinkat(string(8bit) from, string(8bit) to)
+ *!
+ *! Create a symbolic link named @[to] that points to @[from],
+ *! where @[to] is relative to this file..
+ *!
+ *! @note
+ *!   This function is not available on all platforms.
+ *!
+ *! @seealso
+ *!   @[hardlinkat()], @[symlink()], @[readlinkat()], @[unlinkat()]
+ */
+PIKEFUN void symlinkat(string(8bit) from, string(8bit) to)
+{
+  int fd = FD;
+  int err;
+
+  do {
+    THREADS_ALLOW_UID();
+    err = symlinkat(from->str, fd, to->str);
+    THREADS_DISALLOW_UID();
+    if (err >= 0 || errno != EINTR) break;
+    check_threads_etc();
+  } while (1);
+
+  if (err < 0) {
+    report_os_error("symlinkat");
+  }
+  pop_n_elems(args);
+}
+#endif /* HAVE_SYMLINKAT */
+
+#ifdef HAVE_READLINKAT
+/*! @decl string readlinkat(string(8bit) path)
+ *!
+ *! Returns what the symbolic link @[path] points to,
+ *! where @[path] is relative to the open file.
+ *!
+ *! @note
+ *!   This function is not available on all platforms.
+ *!
+ *! @seealso
+ *!   @[readlink()], @[symlink()], @[symlinkat()]
+ */
+PIKEFUN string(8bit) readlinkat(string(8bit) path)
+{
+  int fd = FD;
+  char *buf;
+  ptrdiff_t buflen = 100;
+  ptrdiff_t err = 0;
+
+  do {
+    buflen *= 2;
+    if (!(buf = alloca(buflen))) {
+      Pike_error("Out of memory.\n");
+    }
+
+    do {
+      THREADS_ALLOW_UID();
+      err = readlinkat(fd, path->str, buf, buflen);
+      THREADS_DISALLOW_UID();
+      if (err >= 0 || errno != EINTR) break;
+      check_threads_etc();
+    } while (1);
+  } while(
+#ifdef ENAMETOOLONG
+          ((err < 0) && (errno == ENAMETOOLONG)) ||
+#endif /* ENAMETOOLONG */
+          (err >= buflen - 1));
+
+  if (err < 0) {
+    report_os_error("readlinkat");
+  }
+  pop_n_elems(args);
+  push_string(make_shared_binary_string(buf, err));
+}
+#endif /* HAVE_READLINKAT */
+
 #if defined(HAVE_FDOPENDIR) && defined(HAVE_OPENAT)
 /*! @decl array(string) get_dir(string|void path)
  *!
@@ -3711,7 +3904,7 @@ static void file_get_dir(INT32 args)
   if(FD < 0)
     Pike_error("File not open.\n");
 
-  get_all_args(NULL, args, ".%S", &path);
+  get_all_args(NULL, args, ".%n", &path);
 
   if (path && string_has_null(path)) {
     /* Filenames with NUL are not supported. */
@@ -3854,7 +4047,7 @@ static void file_getxattr(INT32 args)
   ssize_t res;
   char *name;
 
-  get_all_args( NULL, args, "%s", &name );
+  get_all_args( NULL, args, "%c", &name );
 
   THREADS_ALLOW();
   do {
@@ -3914,7 +4107,7 @@ static void file_removexattr( INT32 args )
   char *name;
   int mfd = FD;
   int rv;
-  get_all_args( NULL, args, "%s", &name );
+  get_all_args( NULL, args, "%c", &name );
   THREADS_ALLOW();
 #ifdef HAVE_DARWIN_XATTR
   while( ((rv=fremovexattr( mfd, name, 0 )) < 0) && (errno == EINTR))
@@ -3962,7 +4155,7 @@ static void file_setxattr( INT32 args )
   int flags;
   int rv;
   int mfd = FD;
-  get_all_args( NULL, args, "%s%S%d", &ind, &val, &flags );
+  get_all_args( NULL, args, "%c%n%d", &ind, &val, &flags );
   THREADS_ALLOW();
 #ifdef HAVE_DARWIN_XATTR
   while( ((rv=fsetxattr( mfd, ind, val->str,
@@ -4130,7 +4323,7 @@ static void file_set_nonblocking(INT32 UNUSED(args))
     ERRNO=errno;
     push_int (ERRNO);
     f_strerror (1);
-    Pike_error("Stdio.File->set_nonblocking() failed: %S\n",
+    Pike_error("Stdio.File->set_nonblocking() failed: %pS\n",
 	       Pike_sp[-1].u.string);
   }
 
@@ -5338,12 +5531,12 @@ static void file_connect(INT32 args)
 
   if (args < 4)
   {
-    get_all_args(NULL, args, "%S%*", &dest_addr, &dest_port);
+    get_all_args(NULL, args, "%n%*", &dest_addr, &dest_port);
   }
   else if( args == 5 )
   {
     struct svalue *src_sv;
-    get_all_args(NULL, args, "%S%*%*%*%S",
+    get_all_args(NULL, args, "%n%*%*%*%n",
                  &dest_addr, &dest_port, &src_sv, &src_port, &data);
     if(TYPEOF(*src_sv) != PIKE_T_INT )
     {
@@ -5352,7 +5545,7 @@ static void file_connect(INT32 args)
       src_addr = src_sv->u.string;
     }
   } else {
-    get_all_args(NULL, args, "%S%*%S%*",
+    get_all_args(NULL, args, "%n%*%n%*",
 		 &dest_addr, &dest_port, &src_addr, &src_port);
   }
 
@@ -5748,7 +5941,8 @@ PMOD_EXPORT void create_proxy_pipe(struct object *o, int for_reading)
   push_int(fd_INTERPROCESSABLE);
   apply(n,"pipe",1);
   if(TYPEOF(Pike_sp[-1]) != PIKE_T_OBJECT)
-    Pike_error("Failed to create proxy pipe (errno=%d)!\n",get_file_storage(n)->my_errno);
+    Pike_error("Failed to create proxy pipe (errno=%ld)!\n",
+               get_file_storage(n)->my_errno);
   n2=Pike_sp[-1].u.object;
   /* Stack is now: pipe(read), pipe(write) */
   if(for_reading)
@@ -5968,6 +6162,9 @@ static void exit_file_locking(void)
     PIKE_MAP_VARIABLE("_write_oob_callback",
 		      OFFSETOF(my_file, event_cbs[PIKE_FD_WRITE_OOB]),
 		      tMix, PIKE_T_MIXED, 0);
+    PIKE_MAP_VARIABLE("_error_callback",
+                      OFFSETOF(my_file, event_cbs[PIKE_FD_ERROR]),
+                      tMix, PIKE_T_MIXED, 0);
     PIKE_MAP_VARIABLE("_fs_event_callback",
 		      OFFSETOF(my_file, event_cbs[PIKE_FD_FS_EVENT]),
 		      tMix, PIKE_T_MIXED, 0);

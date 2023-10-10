@@ -881,7 +881,6 @@ PMOD_EXPORT void f_upper_case(INT32 args)
  */
 static void f_random_seed(INT32 args)
 {
-  INT_TYPE i;
   pop_n_elems(args);
 }
 
@@ -1181,7 +1180,7 @@ PMOD_EXPORT void f_search(INT32 args)
 	  if (args > 2) {
 	    int fun = find_identifier("set_index", p);
 	    if (fun < 0)
-	      Pike_error ("Cannot call unknown function \"%s\".\n", fun);
+              Pike_error ("Cannot call unknown function \"set_index\".\n");
 	    apply_low(o, fun + id_level, args-2);
 	    pop_stack();
 	  }
@@ -1874,7 +1873,7 @@ PMOD_EXPORT void f_string_to_unicode(INT32 args)
   ptrdiff_t i;
   unsigned INT_TYPE byteorder = 0;
 
-  get_all_args("string_to_unicode", args, "%W.%i", &in, &byteorder);
+  get_all_args("string_to_unicode", args, "%t.%i", &in, &byteorder);
 
   if (byteorder >= 2) {
     if (byteorder == 2) {
@@ -2025,7 +2024,7 @@ PMOD_EXPORT void f_unicode_to_string(INT32 args)
   int swab=0;
   p_wchar1 surr1, surr2, surrmask, *str0;
 
-  get_all_args("unicode_to_string", args, "%S.%i", &in, &byteorder);
+  get_all_args("unicode_to_string", args, "%n.%i", &in, &byteorder);
 
   if (in->len & 1) {
     bad_arg_error("unicode_to_string", args, 1, "string", Pike_sp-args,
@@ -2208,7 +2207,7 @@ static void f_string_filter_non_unicode( INT32 args )
   static const p_wchar1 replace = 0xfffd;
   static const PCHARP repl_char = {(void*)&replace,1};
 
-  get_all_args("filter_non_unicode", args, "%W", &in);
+  get_all_args("filter_non_unicode", args, "%t", &in);
   check_string_range( in, 1, &min, &max );
 
   if( !in->len || (min >= 0 && max < 0xd800) )
@@ -2285,7 +2284,7 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
   INT32 min, max;
   unsigned char * dst;
 
-  get_all_args("string_to_utf8", args, "%W.%i", &in, &extended);
+  get_all_args("string_to_utf8", args, "%t.%i", &in, &extended);
 
   len = in->len;
 
@@ -2461,7 +2460,7 @@ PMOD_EXPORT void f_utf8_to_string(INT32 args)
   INT_TYPE extended = 0;
   INT32 min, max;
 
-  get_all_args("utf8_to_string", args, "%S.%i", &in, &extended);
+  get_all_args("utf8_to_string", args, "%n.%i", &in, &extended);
 
   check_string_range(in, 1, &min, &max);
 
@@ -2513,7 +2512,7 @@ PMOD_EXPORT void f_utf8_to_string(INT32 args)
 	if ((c & 0xc0) != 0x80)						\
           bad_arg_error ("utf8_to_string", args, 1,                     \
 			 NULL, Pike_sp - args,				\
-			 "Expected continuation character at index %d, " \
+                         "Expected continuation character at index %td, " \
 			 "got 0x%02x.\n",				\
 			 i, c);						\
       } while (0)
@@ -2522,7 +2521,7 @@ PMOD_EXPORT void f_utf8_to_string(INT32 args)
         bad_arg_error ("utf8_to_string", args, 1,                       \
 		       NULL, Pike_sp - args,				\
 		       "UTF-8 sequence beginning with %s0x%02x "	\
-		       "at index %"PRINTPTRDIFFT"d %s.\n",		\
+                       "at index %td %s.\n",				\
 		       prefix, c, i, problem);				\
       } while (0)
 
@@ -3643,7 +3642,7 @@ PMOD_EXPORT void f_crypt(INT32 args)
   crypt_data.initialized = 0;
 #endif
 
-  get_all_args("crypt", args, ".%s%s", &pwd, &saltp);
+  get_all_args("crypt", args, ".%c%c", &pwd, &saltp);
 
   if( !pwd )
   {
@@ -3892,151 +3891,6 @@ PMOD_EXPORT void f_indices(INT32 args)
   push_array(a);
 }
 
-#if 0
-static node *fix_aggregate_mapping_type(node *n)
-{
-  struct pike_type *types[2] = { NULL, NULL };
-  node *args = CDR(n);
-  struct pike_type *new_type = NULL;
-
-#ifdef PIKE_DEBUG
-  if (l_flag > 2) {
-    fprintf(stderr, "Fixing type for aggregate_mapping():\n");
-    print_tree(n);
-
-    fprintf(stderr, "Original type:");
-    simple_describe_type(n->type);
-  }
-#endif /* PIKE_DEBUG */
-
-  if (args) {
-    node *arg = args;
-    int argno = 0;
-
-    /* Make it easier to find... */
-    args->parent = 0;
-
-    while(arg) {
-#ifdef PIKE_DEBUG
-      if (l_flag > 4) {
-	fprintf(stderr, "Searching for arg #%d...\n", argno);
-      }
-#endif /* PIKE_DEBUG */
-      if (arg->token == F_ARG_LIST) {
-	if (CAR(arg)) {
-	  CAR(arg)->parent = arg;
-	  arg = CAR(arg);
-	  continue;
-	}
-	if (CDR(arg)) {
-	  CDR(arg)->parent = arg;
-	  arg = CDR(arg);
-	  continue;
-	}
-	/* Retrace */
-      retrace:
-#ifdef PIKE_DEBUG
-	if (l_flag > 4) {
-	  fprintf(stderr, "Retracing in search for arg %d...\n", argno);
-	}
-#endif /* PIKE_DEBUG */
-	while (arg->parent &&
-	       (!CDR(arg->parent) || (CDR(arg->parent) == arg))) {
-	  arg = arg->parent;
-	}
-	if (!arg->parent) {
-	  /* No more args. */
-	  break;
-	}
-	arg = arg->parent;
-	CDR(arg)->parent = arg;
-	arg = CDR(arg);
-	continue;
-      }
-      if (arg->token == F_PUSH_ARRAY) {
-	/* FIXME: Should get the type from the pushed array. */
-	/* FIXME: Should probably be fixed in las.c:fix_type_field() */
-	/* FIXME: */
-	MAKE_CONSTANT_TYPE(new_type, tMap(tMixed, tMixed));
-	goto set_type;
-      }
-#ifdef PIKE_DEBUG
-      if (l_flag > 4) {
-	fprintf(stderr, "Found arg #%d:\n", argno);
-	print_tree(arg);
-	simple_describe_type(arg->type);
-      }
-#endif /* PIKE_DEBUG */
-      do {
-	if (types[argno]) {
-	  struct pike_type *t = or_pike_types(types[argno], arg->type, 0);
-	  free_type(types[argno]);
-	  types[argno] = t;
-#ifdef PIKE_DEBUG
-	  if (l_flag > 4) {
-	    fprintf(stderr, "Resulting type for arg #%d:\n", argno);
-	    simple_describe_type(types[argno]);
-	  }
-#endif /* PIKE_DEBUG */
-	} else {
-	  copy_pike_type(types[argno], arg->type);
-	}
-	argno = !argno;
-	/* Handle the special case where CAR & CDR are the same.  */
-      } while (argno && arg->parent && CAR(arg->parent) == CDR(arg->parent));
-      goto retrace;
-    }
-
-    if (argno) {
-      yyerror("Odd number of arguments to aggregate_mapping().");
-      goto done;
-    }
-
-    if (!types[0]) {
-      MAKE_CONSTANT_TYPE(new_type, tMap(tUnknown, tUnknown));
-      goto set_type;
-    }
-
-    type_stack_mark();
-    push_finished_type(types[1]);
-    push_finished_type(types[0]);
-    push_type(T_MAPPING);
-    new_type = pop_unfinished_type();
-  } else {
-    MAKE_CONSTANT_TYPE(new_type, tMap(tUnknown, tUnknown));
-    goto set_type;
-  }
-  if (new_type) {
-  set_type:
-    free_type(n->type);
-    n->type = new_type;
-
-#ifdef PIKE_DEBUG
-    if (l_flag > 2) {
-      fprintf(stderr, "Result type: ");
-      simple_describe_type(new_type);
-    }
-#endif /* PIKE_DEBUG */
-
-    if (n->parent) {
-      n->parent->node_info |= OPT_TYPE_NOT_FIXED;
-    }
-  }
- done:
-  if (args) {
-    /* Not really needed, but... */
-    args->parent = n;
-  }
-  if (types[1]) {
-    free_type(types[1]);
-  }
-  if (types[0]) {
-    free_type(types[0]);
-  }
-  return NULL;
-}
-#endif
-
 /*! @decl array values(string|array|mapping|multiset|object x)
  *!
  *!   Return an array of all possible values from indexing the value
@@ -4258,7 +4112,6 @@ PMOD_EXPORT void f_types(INT32 args)
  */
 PMOD_EXPORT void f_annotations(INT32 args)
 {
-  ptrdiff_t size;
   struct array *a = NULL;
   struct pike_type *default_type = mixed_type_string;
   struct svalue *arg = NULL;
@@ -4324,7 +4177,6 @@ PMOD_EXPORT void f_annotations(INT32 args)
  */
 PMOD_EXPORT void f_direct_program_annotations(INT32 args)
 {
-  ptrdiff_t size;
   struct array *m = NULL;
   struct pike_type *default_type = mixed_type_string;
   struct svalue *arg = NULL;
@@ -6171,7 +6023,7 @@ static void set_tz(char *tz)
 
 time_t mktime_zone(struct tm *date, int other_timezone, int tz)
 {
-  INT64 retval;
+  INT64 retval = 0;
   int normalised_time;
 #if defined(__NT__) || defined(_AIX)
   unsigned INT64 ydelta = 0;	/* Number of years. */
@@ -6192,6 +6044,15 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
     ydelta = ((71 + 27 - date->tm_year)/28) * 28;
     date->tm_year += ydelta;
   }
+#elif defined(__HAIKU__)
+  /* mktime() on Haiku appears to attempt to support years before 1970
+   * albeit it is off by one second. We compensate before calling
+   * mktime() in order to be able to handle 1969-12-31T23:59:59 (which
+   * is indistinguishable from 1970-01-01T00:00:00 after the call).
+   */
+  if ((date->tm_year < 70) && !other_timezone) {
+    retval = -1;
+  }
 #endif
 
   {
@@ -6211,7 +6072,7 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
     normalised_time = ((hour * 60) + min) * 60 + sec;
   }
 
-  retval = mktime(date);
+  retval += mktime(date);
 
 #if defined(__NT__) || defined(_AIX)
   /* Restore tm_year. */
@@ -6430,7 +6291,6 @@ PMOD_EXPORT void f_mktime (INT32 args)
 #endif
 }
 
-#ifdef HAVE_STRPTIME
 /*! @decl mapping(string:int) strptime(string(1..255) data, string(1..255) format)
  *!
  *! Parse the given @[data] using the format in @[format] as a date.
@@ -6528,14 +6388,15 @@ PMOD_EXPORT void f_strptime (INT32 args)
     if (Pike_sp[-1].u.string->size_shift || Pike_sp[-2].u.string->size_shift)
       Pike_error("Only 8bit strings are supported\n");
     memset(&tm, 0, sizeof(tm));
-    ret = strptime(Pike_sp[-2].u.string->str, Pike_sp[-1].u.string->str, &tm);
+    ret = pike_strptime(Pike_sp[-2].u.string->str,
+                        Pike_sp[-1].u.string->str,
+                        &tm);
     pop_n_elems(args);
     if (ret)
       encode_tm_tz(&tm);
     else
       push_int(0);
 }
-#endif /* HAVE_STRPTIME */
 
 /*! @decl string(1..255) strftime( string(1..255) format, mapping(string:int) tm)
  *!
@@ -6669,7 +6530,6 @@ PMOD_EXPORT void f_strptime (INT32 args)
  */
 PMOD_EXPORT void f_strftime (INT32 args)
 {
-    struct pike_string *fmt;
     struct string_builder s;
     struct tm date;
 
@@ -6966,7 +6826,6 @@ PMOD_EXPORT void f_glob(INT32 args)
     break;
 
   case T_ARRAY: {
-    INT32 j;
     unsigned matches = 0;
     struct svalue *res;
     a=Pike_sp[1-args].u.array;
@@ -8006,7 +7865,6 @@ PMOD_EXPORT void f_diff(INT32 args)
 {
    struct array *seq;
    struct array *cmptbl;
-   struct array *diff;
    struct array *a, *b;
    int uniq;
 
@@ -8870,7 +8728,7 @@ PMOD_EXPORT void f_object_variablep(INT32 args)
   struct pike_string *s;
   int ret;
 
-  get_all_args("variablep",args,"%o%S",&o, &s);
+  get_all_args("variablep",args,"%o%n",&o, &s);
 
   if(!o->prog)
     bad_arg_error("variablep", args, 1, "object", Pike_sp-args,
@@ -10618,11 +10476,9 @@ void init_builtin_efuns(void)
 		     tOr(tVoid,tInt) tOr(tVoid,tInt),tInt),
 	       tFunc(tOr(tObj, tMap(tStr, tInt)),tInt)),OPT_TRY_OPTIMIZE);
 
-#ifdef HAVE_STRPTIME
   /* function(string, string:mapping(string:int)) */
   ADD_EFUN("strptime", f_strptime,
            tFunc(tStr tStr, tMap(tStr, tInt)), OPT_TRY_OPTIMIZE);
-#endif
 
   /* function(string,mapping(string:int):string) */
   ADD_EFUN("strftime", f_strftime,
@@ -10650,17 +10506,17 @@ void init_builtin_efuns(void)
    * intentionally not part of the prototype, to keep it free for
    * other uses in the future. */
 
-  /* function(mixed,void|object:string) */
+  /* function(mixed,void|object,void|object|int:string) */
   ADD_EFUN("encode_value", f_encode_value,
 	   tFunc(tMix tOr(tVoid,tObj) tOr3(tVoid, tIntPos, tObj),tStr8),
 	   OPT_TRY_OPTIMIZE);
 
-  /* function(mixed,void|object:string) */
+  /* function(mixed,void|object,void|object|int:string) */
   ADD_EFUN("encode_value_canonic", f_encode_value_canonic,
 	   tFunc(tMix tOr(tVoid,tObj) tOr3(tVoid, tIntPos, tObj),tStr8),
 	   OPT_TRY_OPTIMIZE);
 
-  /* function(string,void|object:mixed) */
+  /* function(string,void|object,void|object|int:mixed) */
   ADD_EFUN("decode_value", f_decode_value,
 	   tFunc(tStr tOr3(tVoid,tObj,tInt_10) tOr3(tVoid,tIntPos,tObj),tMix),
 	   OPT_TRY_OPTIMIZE);

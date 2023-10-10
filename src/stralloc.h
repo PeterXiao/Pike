@@ -70,6 +70,7 @@ struct substring_pike_string {
 #define STRING_IS_UPPERCASE        32
 
 #define STRING_IS_LOCKED	   64	/* The str field MUST NOT be reallocated. */
+#define STRING_CONVERT_SURROGATES 128	/* Convert surrogates when done. */
 
 #define STRING_CHECKED_MASK (STRING_IS_UPPERCASE|STRING_IS_LOWERCASE|STRING_CONTENT_CHECKED)
 
@@ -350,6 +351,10 @@ struct pike_string *new_realloc_shared_string(struct pike_string *a, INT32 size,
 struct pike_string *modify_shared_string(struct pike_string *a,
                                          INT32 position,
                                          INT32 c);
+#ifdef __NT__
+PMOD_EXPORT p_wchar1 *pike_string_to_utf16(struct pike_string *s,
+                                           unsigned int flags);
+#endif
 void update_flags_for_add( struct pike_string *a, const struct pike_string *b);
 PMOD_EXPORT struct pike_string *add_shared_strings(const struct pike_string *a,
                                                    const struct pike_string *b);

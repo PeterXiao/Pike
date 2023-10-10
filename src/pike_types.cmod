@@ -965,7 +965,6 @@ static struct pike_type *apply_type_operator(enum PIKE_TYPE op,
 void debug_push_type_operator(enum PIKE_TYPE op, struct pike_type *arg)
 {
   struct pike_type *t = *Pike_compiler->type_stackp;
-  struct pike_type *tmp;
   int free_arg = 0;
 
 #ifdef PIKE_DEBUG
@@ -3455,7 +3454,6 @@ static struct pike_type *find_lfun_type(struct pike_type *t, int lfun)
 {
   struct pike_type *ret = NULL;
   struct pike_type *tmp;
-  struct svalue *s;
 
  loop:
   if (!t) return NULL;
@@ -3532,22 +3530,25 @@ static struct pike_type *find_lfun_type(struct pike_type *t, int lfun)
   }
 
 #if 0
-  /* FIXME: This does not work, as lfun_types contains narrow types
-   *        (zero for arguments, etc), while we here want the wide type
-   *        (mixed for arguments, etc).
-   */
-  s = low_mapping_string_lookup(lfun_types, lfun_strings[lfun]);
+  {
+    /* FIXME: This does not work, as lfun_types contains narrow types
+     *        (zero for arguments, etc), while we here want the wide type
+     *        (mixed for arguments, etc).
+     */
+    struct svalue *s;
+    s = low_mapping_string_lookup(lfun_types, lfun_strings[lfun]);
 
 #ifdef PIKE_DEBUG
-  if (!s) {
-    Pike_fatal("Unknown lfun: %s\n", STR0(lfun_strings[lfun]));
-  }
+    if (!s) {
+      Pike_fatal("Unknown lfun: %s\n", STR0(lfun_strings[lfun]));
+    }
 #endif
 
-  if (TYPEOF(*s) == PIKE_T_TYPE) {
-    ret = s->u.type;
-    add_ref(ret);
-    return ret;
+    if (TYPEOF(*s) == PIKE_T_TYPE) {
+      ret = s->u.type;
+      add_ref(ret);
+      return ret;
+    }
   }
 
   return NULL;
@@ -4258,8 +4259,6 @@ static struct pike_type *expand_transitive_remap(struct pike_type *fun,
 						 struct remap_state *remap,
 						 enum pt_remap_flags flags)
 {
-  struct pike_type *ret_type;
-  struct pike_type *cont_type;
   assert(fun->type == PIKE_T_TRANSITIVE);
 
 #ifdef PIKE_DEBUG
@@ -4468,8 +4467,7 @@ static struct pike_type *lower_type_binop(enum pt_binop op,
   struct pike_type *tmp, *tmp2, *ret;
   struct pike_type *aret = NULL, *bret = NULL;
   struct compilation *c = MAYBE_THIS_COMPILATION;
-  enum pt_cmp_flags avoidable;
-  enum pt_cmp_flags bvoidable;
+  enum pt_cmp_flags tmp_flags;
 
  recur:
   switch(op) {
@@ -4480,9 +4478,9 @@ static struct pike_type *lower_type_binop(enum pt_binop op,
     tmp = a;
     a = b;
     b = tmp;
-    avoidable = aflags;
+    tmp_flags = aflags;
     aflags = bflags;
-    bflags = avoidable;
+    bflags = tmp_flags;
     remap_flags ^= PT_FLAG_REMAP_SWAP_MARKERS;
     op = PT_BINOP_MINUS;
     break;
@@ -5787,11 +5785,10 @@ static struct pike_type *lower_type_binop(enum pt_binop op,
 	return pop_unfinished_type();
 
       default:
-	/* Fall back to complex_function below. */
+        /* Fall back to the complex function case below. */
 	break;
       }
 
-    complex_function:
       /* Either of ai and/or bi is a complex type. */
 
       if (op != PT_BINOP_AND) {
@@ -6181,7 +6178,6 @@ static struct pike_type *lower_type_binop(enum pt_binop op,
       int i;
       int nbounds = 1;
       INT32 bound;
-      INT32 other;
 
       /*
        * Implementation notes:
@@ -6906,7 +6902,6 @@ static struct pike_type *low_subtract_types(struct pike_type *a,
      *     Keep for later evaluation.
      */
     {
-      int nargs;
       struct pike_type *ai = a;
       struct pike_type *bi = b;
       int got_empty = 0;
@@ -8215,8 +8210,6 @@ static struct pike_type *expand_transitive(struct pike_type *fun,
 					   struct pike_type **markers,
 					   int UNUSED(flags))
 {
-  struct pike_type *ret_type;
-  struct pike_type *cont_type;
   assert(fun->type == PIKE_T_TRANSITIVE);
   assert(markers);
 
@@ -9872,137 +9865,10 @@ int check_soft_cast(struct pike_type *to, struct pike_type *from)
 static int low_get_return_type(struct pike_type *a, struct pike_type *b)
 {
   struct compilation *c = THIS_COMPILATION;
-  struct pike_type *t;
   struct call_state cs;
-  int tmp;
 
   CHECK_COMPILER();
 
-#if 0
-  switch(a->type & PIKE_T_MASK)
-  {
-  case T_OR:
-    {
-      struct pike_type *o1, *o2;
-      o1=o2=0;
-
-      type_stack_mark();
-      if(low_get_return_type(a->car, b))
-      {
-	o1=pop_unfinished_type();
-	type_stack_mark();
-      }
-
-      if(low_get_return_type(a->cdr, b))
-	o2=pop_unfinished_type();
-      else
-	pop_stack_mark();
-
-      if(!o1 && !o2) return 0;
-
-      low_or_pike_types(o1, o2, 0);
-
-      if(o1) free_type(o1);
-      if(o2) free_type(o2);
-
-      return 1;
-    }
-
-  case T_AND:
-    type_stack_mark();
-    tmp = low_get_return_type(a->car, b);
-    type_stack_pop_to_mark();
-    if(!tmp) return 0;
-    return low_get_return_type(a->cdr, b);
-
-  case PIKE_T_RING:
-    return low_get_return_type(a->car, b);
-
-  case PIKE_T_SCOPE:
-  case PIKE_T_NAME:
-    return low_get_return_type(a->cdr, b);
-
-  case PIKE_T_ATTRIBUTE:
-    if (low_get_return_type(a->cdr, b)) {
-      push_type_attribute((struct pike_string *)a->car);
-      return 1;
-    }
-    return 0;
-
-  case T_ARRAY:
-    tmp = low_get_return_type(a->cdr, b);
-    if(!tmp) return 0;
-    push_unlimited_array_type(T_ARRAY);
-    return 1;
-
-  case PIKE_T_OPERATOR:
-    {
-      struct pike_type *t = apply_type_operator(a->type, a->car, a->cdr);
-      if (!t) return 0;
-      tmp = low_get_return_type(t, b);
-      free_type(t);
-      return tmp;
-    }
-  }
-
-  t = low_match_types(a, b, NO_SHORTCUTS);
-  if(t)
-  {
-    a = t;
-#if 0
-    if ((c->lex.pragmas & ID_STRICT_TYPES) &&
-	!low_pike_types_le(a, b, 0, 0)) {
-      yyreport_type(REPORT_WARNING, NULL, 0, b, NULL, 0, a, 0, "Type mismatch");
-    }
-#endif /* 0 */
-    switch(a->type & PIKE_T_MASK)
-    {
-    case PIKE_T_TRANSITIVE:
-      a = a->car;
-      if (a->type != T_FUNCTION) {
-	if (a->type == T_MANY) {
-	  a = a->cdr;
-	  push_finished_type_with_markers(a, a_markers, 0);
-	  free_type(t);
-	  return 1;
-	}
-	tmp = low_get_return_type(a, mixed_type_string);
-	free_type(t);
-	return tmp;
-      }
-      /* FALLTHRU */
-    case T_FUNCTION:
-      a = a->cdr;
-      while(a->type == T_FUNCTION) {
-	a = a->cdr;
-      }
-      if (a->type != T_MANY) {
-	tmp = low_get_return_type(a, mixed_type_string);
-	free_type(t);
-	return tmp;
-      }
-      /* FALLTHRU */
-    case T_MANY:
-      a = a->cdr;
-      push_finished_type_with_markers(a, a_markers, 0);
-      free_type(t);
-      return 1;
-
-    case T_TYPE:
-    case T_PROGRAM:
-      push_finished_type(a->car);
-      free_type(t);
-      return 1;
-
-    default:
-      push_type(T_MIXED);
-      free_type(t);
-      return 1;
-    }
-    free_type(t);
-  }
-  return 0;
-#else
   if (!a) return 0;
 
   add_ref(a);
@@ -10062,8 +9928,8 @@ static int low_get_return_type(struct pike_type *a, struct pike_type *b)
   }
 
   compiler_discard_top_type();
+
   return 0;
-#endif
 }
 
 
@@ -12020,7 +11886,6 @@ static struct pike_type *lower_new_check_call(struct pike_type *fun_type,
 
     {
       struct remap_state remap;
-      struct pike_type *old_res;
       struct pike_type *fun_cont;
       enum pt_remap_flags remap_flags = 0;
       struct pike_type *arg_match = NULL;

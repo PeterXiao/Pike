@@ -4,14 +4,14 @@
 || for more information.
 */
 
-#include <math.h>
-
 #include "module.h"
 #include "pike_macros.h"
 #include "interpret.h"
 #include "module_support.h"
 
 #include "config.h"
+
+#include <math.h>
 
 #include "whitefish.h"
 #include "resultset.h"
@@ -400,7 +400,6 @@ static void f_do_query_phrase( INT32 args )
  *! certain word. Call repeatedly until it returns @expr{0@}.
  */
 {
-  double proximity_coefficients[8];
   double field_coefficients[65];
   int numblobs, i;
   Blob **blobs;

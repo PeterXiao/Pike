@@ -173,7 +173,7 @@ PIKECLASS TM
     CVAR struct tm_extra extra;
 
 #define strftime_zone strftime
-#define strptime_zone strptime
+#define strptime_zone pike_strptime
 #define localtime_zone(X,Y) localtime(X)
 #ifndef HAVE_EXTERNAL_TIMEZONE
 #undef timezone
@@ -195,14 +195,14 @@ PIKECLASS TM
       this->modified = 0;
     }
 
-#ifdef HAVE_STRPTIME
     /*! @decl int(0..1) strptime( string(1..255) format, string(1..255) data )
      *!
      *! @note
-     *!  The @expr{format@} and @expr{data@} are reversed.
+     *!   The order of @[format] and @[data] are reversed
+     *!   compared to @[predef::strptime()].
      *!
      *! @seealso
-     *!   @[strftime]
+     *!   @[strftime()], @[predef::strftime()], @[predef::strptime()]
      */
     PIKEFUN int(0..1) strptime( string(1..255) format, string(1..255) data )
     {
@@ -213,12 +213,16 @@ PIKECLASS TM
             RETURN 0;
         RETURN 1;
     }
-#endif /* HAVE_STRPTIME */
 
     /*! @decl string(1..255) strftime( string(1..255) format )
      *!
+     *! Format the timestamp into a string.
+     *!
+     *! See @[predef::strftime()] for details.
+     *!
      *! @seealso
-     *!  @[strftime], @[Gettext.setlocale]
+     *!  @[strptime()], @[predef::strftime()], @[predef::strptime()],
+     *!  @[Gettext.setlocale()]
      */
     PIKEFUN string(1..255) strftime(string(1..255) format)
     {
@@ -339,7 +343,7 @@ PIKECLASS TM
             f_TM_unix_time(0);
             break;
         default:
-            Pike_error("Can not format as %c", flag );
+          Pike_error("Can not format as '%c'", (int)flag );
         }
         if( post_sum )
         {
@@ -1673,6 +1677,53 @@ PIKEFUN string|zero program_defined(program p)
     push_int(0);
 }
 
+/*! @decl object clone_to(object placeholder, program p, @
+ *!                       mixed ... p_args)
+ *!
+ *! Coerce a placeholder object into a clone of a program.
+ *!
+ *! @param placeholder
+ *!   Clone of @[__null_program] to alter.
+ *!
+ *! @param p
+ *!   Program to coerce the object to be a clone of.
+ *!
+ *! @param p_args
+ *!   Arguments to pass to @[lfun::create()] in @[p].
+ *!
+ *! @returns
+ *!   Returns @[placeholder] after successful coercion.
+ *!
+ *! @note
+ *!   @[placeholder] may also already be a clone of [p], in which
+ *!   case this operation is a no-op.
+ *!
+ *! @seealso
+ *!   @[__null_program]
+ */
+PIKEFUN object clone_to(object placeholder, program p, mixed ... p_args)
+  efun;
+{
+  if (placeholder->prog == p) {
+    /* Already done. */
+    RETURN placeholder;
+  }
+
+  if (placeholder->prog != null_program) {
+    Pike_error("Placeholder object is not a null_program clone!\n");
+  }
+
+  free_program(placeholder->prog);
+  add_ref(placeholder->prog = p);
+  if (p->storage_needed) {
+    placeholder->storage = xcalloc(p->storage_needed, 1);
+  }
+  call_c_initializers(placeholder);
+  call_pike_initializers(placeholder, args-2);
+
+  RETURN placeholder;
+}
+
 static void f_proxy_create(INT32 args)
 {
   struct object *o;
@@ -1746,7 +1797,7 @@ static void f_proxy_getter(INT32 args)
   }
 
   if (TYPEOF(*storage) != PIKE_T_OBJECT) {
-    Pike_error("Proxy for %O not initialized.\n",
+    Pike_error("Proxy for %pO not initialized.\n",
 	       Pike_fp->context->prog->constants + 1);
   }
 
@@ -1785,7 +1836,7 @@ static void f_proxy_setter(INT32 args)
   }
 
   if (TYPEOF(*storage) != PIKE_T_OBJECT) {
-    Pike_error("Proxy for %O not initialized.\n",
+    Pike_error("Proxy for %pO not initialized.\n",
 	       &Pike_fp->context->prog->constants[1].sval);
   }
 
@@ -1818,7 +1869,7 @@ static void f_proxy_fun(INT32 args)
   struct identifier *id;
 
   if (TYPEOF(*storage) != PIKE_T_OBJECT) {
-    Pike_error("Proxy for %O not initialized.\n",
+    Pike_error("Proxy for %pO not initialized.\n",
 	       Pike_fp->context->prog->constants + 1);
   }
 
@@ -1847,11 +1898,9 @@ static void f_proxy__sprintf(INT32 args)
   /* NB: We only have a single variable in storage. */
   struct svalue *storage = (struct svalue *)Pike_fp->current_storage;
   struct object *obj;
-  struct inherit *inh;
-  struct identifier *id;
 
   if (TYPEOF(*storage) != PIKE_T_OBJECT) {
-    Pike_error("Proxy for %O not initialized.\n",
+    Pike_error("Proxy for %pO not initialized.\n",
 	       Pike_fp->context->prog->constants + 1);
   }
 
@@ -1994,8 +2043,6 @@ PMOD_EXPORT struct program *proxy_factory(struct program *p,
       yyerror("Aliases not supported (yet).");
     } else if (IDENTIFIER_IS_VARIABLE(id->identifier_flags) ||
 	       IDENTIFIER_IS_CONSTANT(id->identifier_flags)) {
-      struct pike_string *fun_name;
-
       /* Getter. */
       type_stack_mark();
       push_finished_type(id->type);
@@ -2446,6 +2493,20 @@ PIKEFUN int get_weak_flag(multiset m)
 }
 
 /*! @decl program __empty_program(int|void line, string|void file)
+ *!
+ *! @param line
+ *!   Optional line number of @[file] where the program to be compiled
+ *!   definition starts.
+ *!
+ *! @param file
+ *!   Optional file name where the program to be compiled is defined.
+ *!
+ *! @returns
+ *!   Returns a virgin (ie empty) program suitable as the target
+ *!   argument to @[PikeCompiler()].
+ *!
+ *! @seealso
+ *!   @[__null_program], @[PikeCompiler], @[compile_string()]
  */
 PIKEFUN program __empty_program(int|zero|void line, string|void file)
   efun;
@@ -2845,7 +2906,7 @@ PIKECLASS RandomInterface
     struct object *co;
 
     if (f < 0)
-      Pike_error("Calling undefined lfun::%S.\n", lfun_strings[LFUN__RANDOM]);
+      Pike_error("Calling undefined lfun::%pS.\n", lfun_strings[LFUN__RANDOM]);
 
     co = Pike_fp->current_object;
     ref_push_function(co, f_RandomInterface_random_string_fun_num);
@@ -2949,7 +3010,8 @@ PIKECLASS RandomSystem
 	close(random_fd);
 	random_fd = -1;
 
-	Pike_error("Failed to read %d bytes from /dev/urandom.\n", len);
+        Pike_error("Failed to read %"PRINTINT64"d bytes from /dev/urandom.\n",
+                   (INT64)len);
       }
       str += sz;
       len -= sz;
@@ -4067,7 +4129,7 @@ PIKECLASS LiveBacktraceFrame
   {
     struct pike_frame *fp = THIS->fp;
     if (!fp || (l >= fp->num_locals)) {
-      Pike_error("No such local: #%d\n", l);
+      Pike_error("No such local: #%ld\n", (long)l);
     }
     push_svalue(fp->locals + l);
   }
@@ -4076,7 +4138,7 @@ PIKECLASS LiveBacktraceFrame
   {
     struct pike_frame *fp = THIS->fp;
     if (!fp || (l >= fp->num_locals)) {
-      Pike_error("No such local: #%d\n", l);
+      Pike_error("No such local: #%ld\n", (long)l);
     }
     assign_svalue(fp->locals + l, val);
   }
@@ -4085,7 +4147,7 @@ PIKECLASS LiveBacktraceFrame
   {
     struct pike_frame *fp = THIS->fp;
     if (!fp || (l >= fp->num_locals)) {
-      Pike_error("No such local: #%d\n", l);
+      Pike_error("No such local: #%ld\n", (long)l);
     }
     apply_current(f_LiveBacktraceFrame_fill_in_file_and_line_fun_num, 0);
     pop_stack();
@@ -4104,7 +4166,7 @@ PIKECLASS LiveBacktraceFrame
   {
     struct pike_frame *fp = THIS->fp;
     if (!fp || (l >= fp->num_locals)) {
-      Pike_error("No such local: #%d\n", l);
+      Pike_error("No such local: #%ld\n", (long)l);
     }
     apply_current(f_LiveBacktraceFrame_fill_in_file_and_line_fun_num, 0);
     pop_stack();
@@ -7563,7 +7625,7 @@ void exit_builtin(void)
   if (env_allocs) free_mapping (env_allocs);
 #endif
 #ifdef __NT__
-  if (crypto_handle) CloseHandle(crypto_handle);
+  if (crypto_handle) CryptReleaseContext(crypto_handle, 0);
 #else
   if (random_fd!=-1) close(random_fd);
 #endif
